@@ -21,8 +21,8 @@ from torch.utils.checkpoint import checkpoint
 
 from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.models.distributed.shapes import get_shape_shards
-from anemoi.models.layers.graph import TrainableTensor
 from anemoi.models.graph import AnemoiGraphSchema
+from anemoi.models.layers.graph import TrainableTensor
 
 LOGGER = logging.getLogger(__name__)
 
@@ -196,7 +196,9 @@ class AnemoiModelEncProcDec(nn.Module):
                 dim=-1,  # feature dimension
             )
 
-        x_hidden_latent = self.trainable_tensors[self.graph.hidden_name](getattr(self, f"latlons_{self.graph.hidden_name}"), batch_size=batch_size)
+        x_hidden_latent = self.trainable_tensors[self.graph.hidden_name](
+            getattr(self, f"latlons_{self.graph.hidden_name}"), batch_size=batch_size
+        )
 
         # get shard shapes
         shard_shapes_data = {name: get_shape_shards(data, 0, model_comm_group) for name, data in x_data_latent.items()}
