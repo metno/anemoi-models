@@ -15,7 +15,7 @@ class AnemoiGraphSchema:
         self.num_node_features = {name: 2 * graph_data[name]["coords"].shape[1] for name in self.mesh_names}
         self.num_trainable_params = {
             name: config.model.trainable_parameters["data" if name != "hidden" else name]
-            for name in self.graph.mesh_names
+            for name in self.mesh_names
         }
 
     def get_node_emb_size(self, name: str) -> int:
