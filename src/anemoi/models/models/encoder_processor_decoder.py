@@ -82,8 +82,8 @@ class AnemoiModelEncProcDec(nn.Module):
             config.model.processor,
             num_channels=self.num_channels,
             sub_graph=graph_data.get((self.graph.hidden_name, "to", self.graph.hidden_name), None),
-            src_grid_size=self.num_nodes[self.graph.hidden_name],
-            dst_grid_size=self.num_nodes[self.graph.hidden_name],
+            src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+            dst_grid_size=self.graph.num_nodes[self.graph.hidden_name],
         )
 
         # Decoder hidden -> data
