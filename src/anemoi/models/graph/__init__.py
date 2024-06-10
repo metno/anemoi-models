@@ -14,7 +14,7 @@ class AnemoiGraphSchema:
         self.num_nodes = {name: graph_data[name]["coords"].shape[0] for name in self.mesh_names}
         self.num_node_features = {name: 2 * graph_data[name]["coords"].shape[1] for name in self.mesh_names}
         self.num_trainable_params = {
-            name: config.model.trainable_parameters["data" if name != "hidden" else name]
+            name: config.model.trainable_parameters["data" if name != self.hidden_name else name]
             for name in self.mesh_names
         }
 
