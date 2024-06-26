@@ -172,6 +172,7 @@ class GNNProcessor(GraphEdgeMixin, BaseProcessor):
         sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
+        persistent: bool = True,
         **kwargs,
     ) -> None:
         """Initialize GNNProcessor.
@@ -200,7 +201,7 @@ class GNNProcessor(GraphEdgeMixin, BaseProcessor):
             mlp_extra_layers=mlp_extra_layers,
         )
 
-        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
+        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size, persistent=persistent)
 
         self.trainable = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr.shape[0])
 
@@ -259,6 +260,7 @@ class GraphTransformerProcessor(GraphEdgeMixin, BaseProcessor):
         sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
+        persistent : bool = True, 
         **kwargs,
     ) -> None:
         """Initialize GraphTransformerProcessor.
@@ -290,7 +292,7 @@ class GraphTransformerProcessor(GraphEdgeMixin, BaseProcessor):
             mlp_hidden_ratio=mlp_hidden_ratio,
         )
 
-        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
+        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size, persistent=persistent)
 
         self.trainable = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr.shape[0])
 

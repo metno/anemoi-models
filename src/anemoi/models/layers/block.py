@@ -211,7 +211,7 @@ class GraphConvProcessorBlock(GraphConvBaseBlock):
 
 class GraphConvMapperBlock(GraphConvBaseBlock):
 
-    def __ini__(
+    def __init__(
         self,
         in_channels: int,
         out_channels: int,

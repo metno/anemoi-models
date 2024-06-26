@@ -53,6 +53,7 @@ class AnemoiModelEncProcDec(nn.Module):
         self.graph = AnemoiGraphSchema(graph_data, config)
         self.num_channels = config.model.num_channels
         self.multi_step = config.training.multistep_input
+        self.persistent = config.model.persistent
 
         self._calculate_shapes_and_indices(data_indices)
         self._assert_matching_indices(data_indices)
@@ -75,6 +76,7 @@ class AnemoiModelEncProcDec(nn.Module):
                 sub_graph=graph_data[(in_mesh, "to", self.graph.hidden_name)],
                 src_grid_size=self.graph.num_nodes[in_mesh],
                 dst_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+                persistent=self.persistent
             )
 
         # Processor hidden -> hidden
@@ -84,6 +86,7 @@ class AnemoiModelEncProcDec(nn.Module):
             sub_graph=graph_data.get((self.graph.hidden_name, "to", self.graph.hidden_name), None),
             src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
             dst_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+            persistent=self.persistent
         )
 
         # Decoder hidden -> data
@@ -98,6 +101,7 @@ class AnemoiModelEncProcDec(nn.Module):
                 sub_graph=graph_data[(self.graph.hidden_name, "to", out_mesh)],
                 src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
                 dst_grid_size=self.graph.num_nodes[out_mesh],
+                persistent=self.persistent
             )
 
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
@@ -137,7 +141,7 @@ class AnemoiModelEncProcDec(nn.Module):
             Coordinates of the grid
         """
         self.register_buffer(
-            f"latlons_{name}", torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1), persistent=True
+            f"latlons_{name}", torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1), persistent=self.persistent
         )
 
     def _run_mapper(

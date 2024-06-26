@@ -112,7 +112,7 @@ class ForwardMapperPreProcessMixin:
 
 
 class GraphEdgeMixin:
-    def _register_edges(self, sub_graph: dict, src_size: int, dst_size: int, trainable_size: int) -> None:
+    def _register_edges(self, sub_graph: dict, src_size: int, dst_size: int, trainable_size: int, persistent: bool) -> None:
         """Register edge dim, attr, index_base, and increment.
 
         Parameters
@@ -130,7 +130,7 @@ class GraphEdgeMixin:
         self.register_buffer("edge_attr", sub_graph["edge_attr"], persistent=False)
         self.register_buffer("edge_index_base", sub_graph["edge_index"], persistent=False)
         self.register_buffer(
-            "edge_inc", torch.from_numpy(np.asarray([[src_size], [dst_size]], dtype=np.int64)), persistent=True
+            "edge_inc", torch.from_numpy(np.asarray([[src_size], [dst_size]], dtype=np.int64)), persistent=persistent
         )
 
     def _expand_edges(self, edge_index: Adj, edge_inc: Tensor, batch_size: int) -> Adj:
@@ -175,6 +175,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
         sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
+        persistent: bool = True
     ) -> None:
         """Initialize GraphTransformerBaseMapper.
 
@@ -209,7 +210,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
             activation=activation,
         )
 
-        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
+        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size, persistent=persistent)
 
         self.trainable = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr.shape[0])
 
@@ -275,6 +276,7 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
         sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
+        persistent: bool = True, 
     ) -> None:
         """Initialize GraphTransformerForwardMapper.
 
@@ -313,6 +315,7 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
             sub_graph=sub_graph,
             src_grid_size=src_grid_size,
             dst_grid_size=dst_grid_size,
+            persistent=persistent
         )
 
         self.emb_nodes_src = nn.Linear(self.in_channels_src, self.hidden_dim)
@@ -416,6 +419,7 @@ class GNNBaseMapper(GraphEdgeMixin, BaseMapper):
         sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
+        persistent: bool = True,
     ) -> None:
         """Initialize GNNBaseMapper.
 
@@ -448,9 +452,10 @@ class GNNBaseMapper(GraphEdgeMixin, BaseMapper):
             num_chunks=num_chunks,
             cpu_offload=cpu_offload,
             activation=activation,
+            persistent=persistent
         )
 
-        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
+        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size, persistent)
 
         self.emb_edges = MLP(
             in_features=self.edge_dim,
@@ -519,6 +524,7 @@ class GNNForwardMapper(ForwardMapperPreProcessMixin, GNNBaseMapper):
         sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
+        persistent: bool = True, 
     ) -> None:
         """Initialize GNNForwardMapper.
 
