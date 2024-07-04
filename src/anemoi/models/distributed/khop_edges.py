@@ -9,6 +9,7 @@
 
 from typing import Optional
 from typing import Union
+from typing import List
 
 import torch
 import torch.distributed as dist
@@ -18,6 +19,7 @@ from torch_geometric.typing import Adj
 from torch_geometric.utils import bipartite_subgraph
 from torch_geometric.utils import k_hop_subgraph
 from torch_geometric.utils import mask_to_index
+
 
 
 def get_k_hop_edges(nodes: Tensor, edge_attr: Tensor, edge_index: Adj, num_hops: int = 1) -> tuple[Adj, Tensor]:
