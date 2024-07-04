@@ -23,6 +23,7 @@ from torch_geometric.typing import Size
 
 from anemoi.models.distributed.graph import shard_tensor
 from anemoi.models.distributed.graph import sync_tensor
+from anemoi.models.distributed.khop_edges import sort_edges_1hop1
 from anemoi.models.distributed.transformer import shard_heads
 from anemoi.models.distributed.transformer import shard_sequence
 from anemoi.models.layers.attention import MultiHeadSelfAttention
@@ -492,11 +493,10 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
 
         # TODO: remove magic number
-        num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
+        num_chunks = self.num_chunks if self.training else 20  # reduce memory for inference
 
         if num_chunks > 1:
-            edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
-            edge_attr_list = torch.tensor_split(edges, num_chunks, dim=0)
+            edge_index_list, edge_attr_list = sort_edges_1hop1(size, edge_index, edges, num_chunks=num_chunks)
             for i in range(num_chunks):
                 out1 = self.conv(
                     query=query,
@@ -601,12 +601,11 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
 
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
 
-        # TODO: Is this alright?
-        num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
+        # TODO: remove magic number
+        num_chunks = self.num_chunks if self.training else 20  # reduce memory for inference
 
         if num_chunks > 1:
-            edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
-            edge_attr_list = torch.tensor_split(edges, num_chunks, dim=0)
+            edge_index_list, edge_attr_list = sort_edges_1hop1(size, edge_index, edges, num_chunks=num_chunks)
             for i in range(num_chunks):
                 out1 = self.conv(
                     query=query,

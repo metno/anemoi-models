@@ -100,3 +100,49 @@ def sort_edges_1hop(
         return torch.cat(edge_attr_list, dim=0), torch.cat(edge_index_list, dim=1), edge_attr_shapes, edge_index_shapes
 
     return edge_attr, edge_index, [], []
+
+def sort_edges_1hop1(
+    num_nodes: Union[int, tuple[int, int]], edge_index: Adj, edge_attr: Tensor, num_chunks: Optional[int] = None
+) -> tuple[Adj, Tensor, List, List]:
+    """Rearanges edges into 1 hop neighbourhoods for sharding across GPUs.
+
+    Parameters
+    ----------
+    num_nodes : Union[int, Tuple[int, int]]
+        Number of (target) nodes in Graph
+    edge_index : Adj
+        edge index
+    edge_attr : Tensor
+        edge attributes
+    num_chunks : number of chunks
+
+    Returns
+    -------
+    Tuple[Adj, Tensor, List, List]
+        edges sorted according to k hop neigh., edge attributes of sorted edges,
+        shapes of edge indices for partitioning between GPUs, shapes of edge attr for partitioning between GPUs
+    """
+
+    if num_chunks > 1:
+        if isinstance(num_nodes, int):
+            node_chunks = torch.arange(num_nodes, device=edge_index.device).tensor_split(num_chunks)
+        else:
+            nodes_src = torch.arange(num_nodes[0], device=edge_index.device)
+            node_chunks = torch.arange(num_nodes[1], device=edge_index.device).tensor_split(num_chunks)
+
+        edge_index_list = []
+        edge_attr_list = []
+        for node_chunk in node_chunks:
+            if isinstance(num_nodes, int):
+                edge_index_chunk, edge_attr_chunk = get_k_hop_edges(node_chunk, edge_index, edge_attr)
+            else:
+                edge_index_chunk, edge_attr_chunk = bipartite_subgraph(
+                    (nodes_src, node_chunk), edge_index, edge_attr, size=(num_nodes[0], num_nodes[1])
+                )
+            edge_index_list.append(edge_index_chunk)
+            edge_attr_list.append(edge_attr_chunk)
+
+        # return torch.cat(edge_index_list, dim=1), torch.cat(edge_attr_list, dim=0)
+        return edge_index_list, edge_attr_list
+
+    return edge_index, edge_attr
