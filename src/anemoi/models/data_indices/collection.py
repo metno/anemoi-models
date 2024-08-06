@@ -30,7 +30,7 @@ class IndexCollection:
         self.diagnostic = (
             [] if config.data.diagnostic is None else OmegaConf.to_container(config.data.diagnostic, resolve=True)
         )
-
+        self.quantiles = [] if config.data.quantiles is None else OmegaConf.to_container(config.data.quantiles, resolve=True)
         assert set(self.diagnostic).isdisjoint(self.forcing), (
             f"Diagnostic and forcing variables overlap: {set(self.diagnostic).intersection(self.forcing)}. ",
             "Please drop them at a dataset-level to exclude them from the training data.",
@@ -42,6 +42,9 @@ class IndexCollection:
         name_to_index_model_output = {
             name: i for i, name in enumerate(key for key in self.name_to_index if key not in self.forcing)
         }
+        for name in self.quantiles:
+            name_to_index_model_input[name + str(config.data.quantiles_limit)] = max(name_to_index_model_output.values()) + 1
+            name_to_index_model_input[name + str(1 - config.data.quantiles_limit)] = max(name_to_index_model_output.values()) + 1
 
         self.data = DataIndex(self.diagnostic, self.forcing, self.name_to_index)
         self.model = ModelIndex(self.diagnostic, self.forcing, name_to_index_model_input, name_to_index_model_output)
