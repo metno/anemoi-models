@@ -51,8 +51,9 @@ class InputNormalizer(BasePreprocessor):
 
         self._validate_normalization_inputs(name_to_index_training_input, minimum, maximum, mean, stdev)
 
-        _norm_add = np.zeros((minimum.size,), dtype=np.float32)
-        _norm_mul = np.ones((minimum.size,), dtype=np.float32)
+        num_quantile_vars = 0 if config.data.quantiles is None else len(config.data.quantiles)*len(config.data.quantile_values)
+        _norm_add = np.zeros((minimum.size + num_quantile_vars), dtype=np.float32)
+        _norm_mul = np.ones((minimum.size + num_quantile_vars,), dtype=np.float32)
 
         for name, i in name_to_index_training_input.items():
             method = self.methods.get(name, self.default)
@@ -81,11 +82,47 @@ class InputNormalizer(BasePreprocessor):
             else:
                 raise ValueError[f"Unknown normalisation method for {name}: {method}"]
 
+        # Add quantile values at the end    
+        try: 
+            for i, name in enumerate(config.data.quantiles):
+                for j, val in enumerate(config.data.quantile_values):
+                    quant_idx = - num_quantile_vars + i*len(config.data.quantiles) + j
+                    var_idx = self.data_indices.data.name_to_index[name]
+                    method = self.methods.get(name, self.default)
+                    if method == "mean-std":
+                        LOGGER.debug(f"Normalizing: {name}quant{val} is mean-std-normalised.")
+                        if stdev[var_idx] < (mean[var_idx] * 1e-6):
+                            warnings.warn(f"Normalizing: the field seems to have only one value {mean[var_idx]}")
+                        _norm_mul[quant_idx] = 1 / stdev[var_idx]
+                        _norm_add[quant_idx] = -mean[var_idx] / stdev[var_idx]
+
+                    elif method == "min-max":
+                        LOGGER.debug(f"Normalizing: {name}quant{val} is min-max-normalised to [0, 1].")
+                        x = maximum[var_idx] - minimum[var_idx]
+                        if x < 1e-9:
+                            warnings.warn(f"Normalizing: the field {name}quant{val} seems to have only one value {maximum[var_idx]}.")
+                        _norm_mul[quant_idx] = 1 / x
+                        _norm_add[quant_idx] = -minimum[var_idx] / x
+
+                    elif method == "max":
+                        LOGGER.debug(f"Normalizing: {name}quant{val} is max-normalised to [0, 1].")
+                        _norm_mul[quant_idx] = 1 / maximum[var_idx]
+
+                    elif method == "none":
+                        LOGGER.info(f"Normalizing: {name}quant{val} is not normalized.")
+
+                    else:
+                        raise ValueError[f"Unknown normalisation method for {name}: {method}"]
+        except:
+            pass
+        
+        quant_indices = torch.arange(minimum.size, minimum.size + num_quantile_vars, 1, dtype=torch.int)
+        
         # register buffer - this will ensure they get copied to the correct device(s)
         self.register_buffer("_norm_mul", torch.from_numpy(_norm_mul), persistent=True)
         self.register_buffer("_norm_add", torch.from_numpy(_norm_add), persistent=True)
         self.register_buffer("_input_idx", data_indices.data.input.full, persistent=True)
-        self.register_buffer("_output_idx", self.data_indices.data.output.full, persistent=True)
+        self.register_buffer("_output_idx", torch.cat((self.data_indices.data.output.full,quant_indices)), persistent=True)
 
     def _validate_normalization_inputs(self, name_to_index_training_input: dict, minimum, maximum, mean, stdev):
         assert len(self.methods) == sum(len(v) for v in self.method_config.values()), (

@@ -24,6 +24,9 @@ class BaseTensorIndex:
         excludes : list[str]
             Variables to exclude from the indexing.
             e.g. Diagnostic variables for the input indexing, forcing variables for the output indexing
+        added : list[str]
+            Added variables not in the dataset.
+            e.g. Quantile variables 
         name_to_index : dict[str, int]
             Dictionary mapping variable names to their index in the Tensor.
         """
@@ -108,7 +111,9 @@ class InputTensorIndex(BaseTensorIndex):
 class OutputTensorIndex(BaseTensorIndex):
     """Indexing for output variables."""
 
-    def __init__(self, *, includes: list[str], excludes: list[str], name_to_index: dict[str, int]) -> None:
+    def __init__(self, *, includes: list[str], excludes: list[str], name_to_index: dict[str, int], quantiles: list[str] = []) -> None:
         super().__init__(includes=includes, excludes=excludes, name_to_index=name_to_index)
         self.forcing = self._removed
         self.diagnostic = self._only
+        self.quantiles = self._build_idx_from_includes(quantiles)
+        self.full_minus_quantiles = self._build_idx_from_excludes(quantiles)

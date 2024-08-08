@@ -68,9 +68,10 @@ class DataIndex(BaseIndex):
 class ModelIndex(BaseIndex):
     """Indexing for model variables."""
 
-    def __init__(self, diagnostic, forcing, name_to_index_model_input, name_to_index_model_output) -> None:
+    def __init__(self, diagnostic, forcing, quantiles, name_to_index_model_input, name_to_index_model_output) -> None:
         self._diagnostic = diagnostic
         self._forcing = forcing
+        self._quantiles = quantiles
         self._name_to_index_model_input = name_to_index_model_input
         self._name_to_index_model_output = name_to_index_model_output
         self.input = InputTensorIndex(
@@ -80,14 +81,15 @@ class ModelIndex(BaseIndex):
         )
 
         self.output = OutputTensorIndex(
-            includes=diagnostic,
+            includes=diagnostic + quantiles,
             excludes=[],
             name_to_index=name_to_index_model_output,
+            quantiles=quantiles
         )
 
     def __repr__(self) -> str:
         return (
-            f"{self.__class__.__name__}(diagnostic={self._input}, forcing={self._output}, "
+            f"{self.__class__.__name__}(diagnostic={self._input}, forcing={self._output}, quantiles={self._quantiles} "
             f"name_to_index_model_input={self._name_to_index_model_input}, "
             f"name_to_index_model_output={self._name_to_index_model_output})"
         )
