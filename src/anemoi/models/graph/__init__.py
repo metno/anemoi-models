@@ -1,5 +1,7 @@
 from anemoi.utils.config import DotDict
 
+# It seems based on the graph.pt it fetches 
+# correct names such as mesh_names (era,netatmo, hidden)
 
 class AnemoiGraphSchema:
     def __init__(self, graph_data: dict, config: DotDict) -> None:
