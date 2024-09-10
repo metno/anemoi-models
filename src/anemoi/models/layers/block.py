@@ -524,7 +524,6 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
 
         return nodes_new, edge_attr
 
-
 class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
     """Graph Transformer Block for node embeddings."""
 
@@ -629,3 +628,278 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
         nodes_new = self.node_dst_mlp(out) + out
 
         return nodes_new, edge_attr
+
+
+class GraphTransformerFuserBaseBlock(GraphTransformerBaseBlock):
+    def __init__(
+        self,
+        in_channels_x: int,
+        in_channels_obs: int,
+        hidden_dim: int,
+        out_channels: int,
+        edge_dim_x: int,
+        edge_dim_obs: int,
+        num_heads: int = 16,
+        bias: bool = True,
+        activation: str = "GELU",
+        num_chunks: int = 1,
+        update_src_nodes: bool = False,
+        **kwargs,
+    ) -> None:
+        
+        super().__init__(
+            in_channels_x, 
+            hidden_dim, 
+            out_channels, 
+            edge_dim_x, 
+            num_heads, 
+            bias, 
+            activation, 
+            update_src_nodes,
+            num_chunks,
+            **kwargs
+            )
+        """
+            comment: we override the whole graphtransformerbaseblock
+            constructor. Not interested in shared weights. This
+            block is independent. Just for resuse of class methods
+        
+        """
+        # initialize Q,K, V funcs for x and obs respectively
+        self.lin_query = nn.Linear(in_channels_x, num_heads*self.out_channels_conv)
+        self.lin_key = nn.Linear(in_channels_obs, num_heads*self.out_channels_conv)
+        self.lin_value = nn.Linear(in_channels_obs, num_heads*self.out_channels_conv)
+        self.lin_self = nn.Linear(in_channels_x, num_heads * self.out_channels_conv, bias=bias)
+
+        # initialize layer normalization for x and obs respectively
+        self.layer_normalization_x = nn.LayerNorm(in_channels_x)
+        self.layer_normalization_obs = nn.LayerNorm(in_channels_obs)
+        
+        # initialize linear transformation for edges 
+        self.lin_edge_x = nn.Linear(edge_dim_x, num_heads * self.out_channels_conv)  # , bias=False)
+        self.lin_edge_obs = nn.Linear(edge_dim_obs, num_heads * self.out_channels_conv)  # , bias=False)
+
+        # initialize layer normalization for outputs
+        self.layer_norm_output = nn.LayerNorm(out_channels) # layer normalize output after fuse
+
+        # initialize fuse for projection layer
+        self.fuse_projection_layer = nn.Linear(out_channels, out_channels)
+
+        # initialize GraphTransformerConv (cross-attention)
+        self.cross_attn = GraphTransformerConv(out_channels=out_channels)
+
+        try:
+            act_func = getattr(nn, activation)
+        except AttributeError as ae:
+            LOGGER.error("Activation function %s not supported", activation)
+            raise RuntimeError from ae
+
+        self.node_dst_mlp = nn.Sequential(
+            nn.LayerNorm(out_channels),
+            nn.Linear(out_channels, hidden_dim),
+            act_func(),
+            nn.Linear(hidden_dim, out_channels),
+        )
+
+        if self.update_src_nodes:
+            self.node_src_mlp = nn.Sequential(
+                nn.LayerNorm(out_channels),
+                nn.Linear(out_channels, hidden_dim),
+                act_func(),
+                nn.Linear(hidden_dim, out_channels),
+            )
+    def shard_qkve_heads_obs(
+            self,
+            query: Tensor,
+            key: Tensor,
+            value: Tensor,
+            edges_x: Tensor,
+            edges_obs: Tensor,
+            shapes: tuple,
+            batch_size: int,
+            model_comm_group: Optional[ProcessGroup] = None,
+            ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
+        """Shards qkv and edges along head dimension."""
+        # should it be an extra shape wrt obs and x?
+        # maybe create an another baseclass to include this part?
+        shape_src_nodes, shape_dst_nodes, shape_edges = shapes
+
+        query, key, value, edges_x, edges_obs = (
+            einops.rearrange(
+                t,
+                "(batch grid) (heads vars) -> batch heads grid vars",
+                heads=self.num_heads,
+                vars=self.out_channels_conv,
+                batch=batch_size,
+            )
+            for t in (query, key, value, edges_x, edges_obs)
+        )
+        query = shard_heads(query, shapes=shape_dst_nodes, mgroup=model_comm_group)
+        key = shard_heads(key, shapes=shape_src_nodes, mgroup=model_comm_group)
+        value = shard_heads(value, shapes=shape_src_nodes, mgroup=model_comm_group)
+        edges_x = shard_heads(edges_x, shapes=shape_edges, mgroup=model_comm_group)
+        edges_obs = shard_heads(edges_obs, shapes=shape_edges, mgroup=model_comm_group)
+
+        query, key, value, edges_x, edges_obs = (
+            einops.rearrange(t, "batch heads grid vars -> (batch grid) heads vars") for t in (query, key, value, edges)
+        )
+
+        return query, key, value, edges_x, edges_obs
+
+class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
+    """Graph Transformer Fuser Block for fusing node embeddings."""
+
+    def __init__(
+        self,
+        in_channels_x: int,
+        in_channels_obs: int,
+        hidden_dim: int,
+        out_channels: int,
+        edge_dim_x: int,
+        edge_dim_obs: int,
+        num_heads: int = 16,
+        bias: bool = True,
+        activation: str = "GELU",
+        num_chunks: int = 1,
+        update_src_nodes: bool = False,
+        **kwargs,
+    ) -> None:
+        """Initialize GraphTransformerFuserBlock.
+
+        Parameters
+        ----------
+        in_channels_x : int
+            Number of input channels (first grid).
+        in_channels_obs : int
+            Number of input channels (observation grid).
+        out_channels : int
+            Number of output channels.
+        edge_dim_x : int,
+            Edge dimension for x
+        edge_dim_obs : int,
+            Edge dimension for observation
+        num_heads : int,
+            Number of heads
+        bias : bool, by default True,
+            Add bias or not
+        activation : str, optional
+            Activation function, by default "GELU"
+        update_src_nodes: bool, by default False
+            Update src if src and dst nodes are given
+        """
+        super().__init__(
+            in_channels_x,
+            in_channels_obs,
+            hidden_dim,
+            out_channels,
+            edge_dim_x,
+            edge_dim_obs,
+            num_heads,
+            bias,
+            activation,
+            num_chunks,
+            update_src_nodes,
+            **kwargs
+        )
+    
+    def forward(
+            self,
+            x : OptPairTensor,
+            obs : OptPairTensor,
+            edge_attr_x : Tensor,
+            edge_index_x : Adj,
+            edge_attr_obs : Tensor,
+            edge_index_obs: Adj,
+            shapes: tuple, # <- should it be shapes_x and shapes_obs?
+            batch_size: int,
+            model_comm_group: Optional[ProcessGroup] = None,
+            size: Optional[Size] = None
+            ):
+        x_skip = x # saving a copy, for skip connection
+        #obs_skip = obs # saving a copy, for skip connection
+
+
+        x = self.layer_normalization_x(x)
+        obs = self.layer_normalization_obs(obs)
+        
+        # generate feature maps for residual connection
+        # is this needed?
+        x_r = self.lin_self(x)
+        obs_r = self.lin_self_obs(obs)
+
+        # Gather Q (from x input)
+        query = self.lin_query(x)
+
+        # Gather K,V (from obs input)
+        key = self.lin_key(obs)
+        value = self.lin_value(obs)
+
+        edges_x = self.lin_edge_x(edge_attr_x)
+        edges_obs = self.lin_edge_obs(edge_attr_obs)
+
+        if model_comm_group is not None:
+            assert (
+                model_comm_group.size() == 1 or batch_size == 1
+            ), "Only batch size of 1 is supported when model is sharded across GPUs"
+
+        # TODO: find how edges_x and edges_obs heads is going to be sharded (tuple for now, but might not work)
+        # TODO: should it be shape_x and shape_obs? find out
+        query, key, value, edges = self.shard_qkve_heads_obs(
+            query, 
+            key, 
+            value, 
+            edges_x, 
+            edges_obs, 
+            shapes, 
+            batch_size, 
+            model_comm_group
+            )
+
+        num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
+
+        if num_chunks > 1:
+            #TODO: is this correct?
+            # combine edge attr (x and obs) and index (x and obs)
+            edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
+            edge_attr_list_combined = torch.cat([edge_attr_x, edge_attr_obs], dim = 0)
+
+            edge_index_list = torch.tensor_split(edge_index_list_combined, num_chunks, dim=1)
+            edge_attr_list = torch.tensor_split(edge_attr_list_combined, num_chunks, dim=0)
+
+            for i in range(num_chunks):
+                out1 = self.conv(
+                    query=query,
+                    key=key,
+                    value=value,
+                    edge_attr=edge_attr_list[i],
+                    edge_index=edge_index_list[i],
+                    size=size,
+                )
+                if i == 0:
+                    out = torch.zeros_like(out1)
+                out = out + out1
+        else:
+            edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
+            edge_attr_list_combined = torch.cat([edge_attr_x, edge_attr_obs], dim = 0)
+
+            out = self.conv(
+                query=query, 
+                key=key, 
+                value=value, 
+                edge_attr=edge_attr_list_combined, 
+                edge_index=edge_index_list_combined, 
+                size=size #TODO: find out if the size correct, or needs to be changed
+                )
+
+        out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
+        out = self.fuse_projection_layer(out + x_r) # + obs_r) dont think obs_r is needed
+
+        out = out + x_skip #+ obs_skip # do we need skip connection for obs??
+
+        nodes_new_dst = self.node_dst_mlp(out) + out
+
+        nodes_new_src = self.node_src_mlp(x_skip) + x_skip if self.update_src_nodes else x_skip
+
+        nodes_new = (nodes_new_src, nodes_new_dst)
+
+        return nodes_new, edge_attr_x, edge_attr_obs
