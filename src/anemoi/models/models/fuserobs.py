@@ -77,6 +77,14 @@ class AnemoiObsFuser(AnemoiModelEncProcDec):
                     dst_grid_size=self.graph.num_nodes[self.graph.hidden_name],
                 )
         
+        # skeleton, this is not the end product
+        self.fuser = instantiate(
+            config.model.fuser,
+            num_channels = self.num_channels,
+            
+
+        )
+        
     def forward(self, x: Tensor, model_comm_group: Optional[ProcessGroup] = None) -> Tensor:
         batch_size = x.shape[0]
         ensemble_size = x.shape[2]

@@ -8,7 +8,7 @@
 #
 
 from abc import ABC
-from typing import Optional
+from typing import Optional, List
 
 import numpy as np
 import torch
@@ -26,6 +26,7 @@ from anemoi.models.distributed.shapes import change_channels_in_shape
 from anemoi.models.distributed.shapes import get_shape_shards
 from anemoi.models.layers.block import GraphConvMapperBlock
 from anemoi.models.layers.block import GraphTransformerMapperBlock
+from anemoi.models.layers.block import GraphTransformerFuserBlock
 from anemoi.models.layers.graph import TrainableTensor
 from anemoi.models.layers.mlp import MLP
 
@@ -133,6 +134,15 @@ class GraphEdgeMixin:
             "edge_inc", torch.from_numpy(np.asarray([[src_size], [dst_size]], dtype=np.int64)), persistent=True
         )
 
+    def _register_edges_multi_grid(self, sub_graph: List[dict, dict], src_size: List[int, int], dst_size: List[int, int], trainable_size: int) -> None:
+        for idx in range(len(sub_graph)):
+            self.edge_dim = sub_graph[f"edge_attr_{idx}"].shape[1] + trainable_size
+            self.register_buffer(f"edge_attr_{idx}", sub_graph["edge_attr"], persistent=False)
+            self.register_buffer(f"edge_index_base_{idx}", sub_graph["edge_index"], persistent=False)
+            self.register_buffer(
+                "edge_inc_{idx}", torch.from_numpy(np.asarray([[src_size[idx]], [dst_size[idx]]], dtype=np.int64)), persistent=True
+            )
+            
     def _expand_edges(self, edge_index: Adj, edge_inc: Tensor, batch_size: int) -> Adj:
         """Expand edge index while incrementing to the edge index.
 
@@ -397,6 +407,98 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
         x_dst = self.emb_nodes_dst(x_dst)
         shapes_dst = change_channels_in_shape(shapes_dst, self.hidden_dim)
         return x_src, x_dst, shapes_src, shapes_dst
+
+
+class GraphTransformerFuserMapper(GraphEdgeMixin):
+    def __init__(
+            self,
+            in_channels_src_x : int = 0,
+            in_channels_src_obs : int = 0,
+            in_channels_dst: int = 0,
+            hidden_dim: int = 128,
+            trainable_size: int = 8,
+            out_channels_dst: Optional[int] = None,
+            num_chunks: int = 1,
+            cpu_offload: bool = False,
+            activation: str = "GELU",
+            num_heads: int = 16,
+            mlp_hidden_ratio: int = 4,
+            sub_graph: List[Optional[dict],Optional[dict]] = None,
+            src_grid_size: int = 0,
+            dst_grid_size: int = 0,
+            ) -> None:
+        super().__init__(
+        )
+        """in_channels_x: int,
+        in_channels_obs: int,
+        hidden_dim: int,
+        out_channels: int,
+        edge_dim_x: int,
+        edge_dim_obs: int,
+        num_heads: int = 16,
+        bias: bool = True,
+        activation: str = "GELU",
+        num_chunks: int = 1,
+        update_src_nodes: bool = False,
+        **kwargs: Any"""
+
+        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
+
+        self.trainable = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr.shape[0])
+
+        self.proc = GraphTransformerFuserBlock(
+            in_channels_src_x,
+            in_channels_src_obs,
+            hidden_dim, 
+            edge_dim_x=self.edge_dim[0],
+            edge_dim_obs= self.edge_dim[1],
+            num_heads=num_heads,
+            activation=activation,
+            num_chunks=num_chunks
+        )
+    
+    def forward(
+        self,
+        x : PairTensor,
+        obs : PairTensor,
+        batch_size: int,
+        shard_shapes_x: tuple[tuple[int], tuple[int]], 
+        shard_shapes_obs: tuple[tuple[int], tuple[int]],
+        model_comm_group: Optional[ProcessGroup] = None,
+    ) -> PairTensor:
+        # TODO: might not be correct. Revist this later
+        size_x = (sum(x[0] for x in shard_shapes_x[0]), sum(x[0] for x in shard_shapes_x[1]))
+        size_obs = (sum(x[0] for x in shard_shapes_obs[0]), sum(x[0] for x in shard_shapes_obs[1]))
+        
+        # x grid
+        edge_attr_x = self.trainable(self.edge_attr[0], batch_size)
+        edge_index_x = self._expand_edges(self.edge_index_base[0], self.edge_inc_0, batch_size)
+        shapes_edge_attr_x = get_shape_shards(edge_attr_x, 0, model_comm_group)
+        edge_attr_x= shard_tensor(edge_attr_x, 0, shapes_edge_attr_x, model_comm_group)
+
+        # obs grid
+        edge_attr_obs = self.trainable(self.edge_attr[1], batch_size)
+        edge_index_obs = self._expand_edges(self.edge_index_base[1], self.edge_inc_1, batch_size)
+        shapes_edge_attr_obs = get_shape_shards(edge_attr_obs, 0, model_comm_group)
+        edge_attr_obs = shard_tensor(edge_attr_obs, 0, shapes_edge_attr_obs, model_comm_group)
+
+        (x_src, x_dst), edge_attr_x, edge_attr_obs = self.proc(
+            x,
+            obs,
+            edge_attr_x, 
+            edge_index_x,
+            edge_attr_obs,
+            edge_index_obs,
+            shapes_edge_attr_x,
+            shapes_edge_attr_obs,
+            batch_size,
+            model_comm_group,
+            size_x = size_x,
+            size_obs = size_obs
+
+        )
+
+        return x_dst
 
 
 class GNNBaseMapper(GraphEdgeMixin, BaseMapper):

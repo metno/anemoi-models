@@ -810,22 +810,28 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             edge_index_x : Adj,
             edge_attr_obs : Tensor,
             edge_index_obs: Adj,
-            shapes: tuple, # <- should it be shapes_x and shapes_obs?
+            shapes_x: tuple, # <- should it be shapes_x and shapes_obs?
+            shapes_obs: tuple,
             batch_size: int,
             model_comm_group: Optional[ProcessGroup] = None,
-            size: Optional[Size] = None
+            size_x: Optional[Size] = None,
+            size_obs: Optional[Size] = None
             ):
         x_skip = x # saving a copy, for skip connection
         #obs_skip = obs # saving a copy, for skip connection
 
+        # combine shape and size
+        size = (size_x[0] + size_obs[0], size_x[1] + size_obs[1])
+        shapes = (shapes_x[0] + shapes_obs[0], shapes_x[1] + shapes_obs[1])
 
+        # normalize
         x = self.layer_normalization_x(x)
         obs = self.layer_normalization_obs(obs)
         
         # generate feature maps for residual connection
         # is this needed?
         x_r = self.lin_self(x)
-        obs_r = self.lin_self_obs(obs)
+        #obs_r = self.lin_self_obs(obs)
 
         # Gather Q (from x input)
         query = self.lin_query(x)
@@ -844,7 +850,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
 
         # TODO: find how edges_x and edges_obs heads is going to be sharded (tuple for now, but might not work)
         # TODO: should it be shape_x and shape_obs? find out
-        query, key, value, edges = self.shard_qkve_heads_obs(
+        query, key, value, edges_x, edges_obs = self.shard_qkve_heads_obs(
             query, 
             key, 
             value, 
@@ -861,13 +867,13 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             #TODO: is this correct?
             # combine edge attr (x and obs) and index (x and obs)
             edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
-            edge_attr_list_combined = torch.cat([edge_attr_x, edge_attr_obs], dim = 0)
+            edge_attr_list_combined = torch.cat([edges_x, edges_obs], dim = 0)
 
             edge_index_list = torch.tensor_split(edge_index_list_combined, num_chunks, dim=1)
             edge_attr_list = torch.tensor_split(edge_attr_list_combined, num_chunks, dim=0)
 
             for i in range(num_chunks):
-                out1 = self.conv(
+                out1 = self.cross_attn(
                     query=query,
                     key=key,
                     value=value,
@@ -882,7 +888,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
             edge_attr_list_combined = torch.cat([edge_attr_x, edge_attr_obs], dim = 0)
 
-            out = self.conv(
+            out = self.cross_attn(
                 query=query, 
                 key=key, 
                 value=value, 
