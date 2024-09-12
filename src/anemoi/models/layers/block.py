@@ -630,13 +630,14 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
         return nodes_new, edge_attr
 
 
-class GraphTransformerFuserBaseBlock(GraphTransformerBaseBlock):
+class GraphTransformerFuserBaseBlock(nn.Module):
     def __init__(
         self,
         in_channels_x: int,
         in_channels_obs: int,
         hidden_dim: int,
-        out_channels: int,
+        #out_channels: int, out_channels = in_channels_x which is 
+        # num_channels which is the output from the encoder
         edge_dim_x: int,
         edge_dim_obs: int,
         num_heads: int = 16,
@@ -647,7 +648,7 @@ class GraphTransformerFuserBaseBlock(GraphTransformerBaseBlock):
         **kwargs,
     ) -> None:
         
-        super().__init__(
+        """super().__init__(
             in_channels_x, 
             hidden_dim, 
             out_channels, 
@@ -658,13 +659,26 @@ class GraphTransformerFuserBaseBlock(GraphTransformerBaseBlock):
             update_src_nodes,
             num_chunks,
             **kwargs
-            )
+            )"""
         """
             comment: we override the whole graphtransformerbaseblock
             constructor. Not interested in shared weights. This
             block is independent. Just for resuse of class methods
+
+            new status, this is independent class and will not
+            inherit from graphtransformerbaseblock
         
         """
+        super().__init__() # for nn.Module 
+        out_channels = in_channels_x
+
+        self.update_src_nodes = update_src_nodes
+
+        self.out_channels_conv = out_channels // num_heads
+        self.num_heads = num_heads
+
+        self.num_chunks = num_chunks
+
         # initialize Q,K, V funcs for x and obs respectively
         self.lin_query = nn.Linear(in_channels_x, num_heads*self.out_channels_conv)
         self.lin_key = nn.Linear(in_channels_obs, num_heads*self.out_channels_conv)
@@ -746,6 +760,22 @@ class GraphTransformerFuserBaseBlock(GraphTransformerBaseBlock):
 
         return query, key, value, edges_x, edges_obs
 
+    def shard_output_seq(
+        self,
+        out: Tensor,
+        shapes: tuple,
+        batch_size: int,
+        model_comm_group: Optional[ProcessGroup] = None,
+    ) -> Tensor:
+        """Shards Tensor sequence dimension."""
+        shape_dst_nodes = shapes[1]
+
+        out = einops.rearrange(out, "(batch grid) heads vars -> batch heads grid vars", batch=batch_size)
+        out = shard_sequence(out, shapes=shape_dst_nodes, mgroup=model_comm_group)
+        out = einops.rearrange(out, "batch heads grid vars -> (batch grid) (heads vars)")
+
+        return out
+
 class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
     """Graph Transformer Fuser Block for fusing node embeddings."""
 
@@ -754,7 +784,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         in_channels_x: int,
         in_channels_obs: int,
         hidden_dim: int,
-        out_channels: int,
+        #out_channels: int,
         edge_dim_x: int,
         edge_dim_obs: int,
         num_heads: int = 16,
@@ -791,7 +821,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             in_channels_x,
             in_channels_obs,
             hidden_dim,
-            out_channels,
+            #out_channels,
             edge_dim_x,
             edge_dim_obs,
             num_heads,
@@ -821,7 +851,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         #obs_skip = obs # saving a copy, for skip connection
 
         # combine shape and size
-        size = (size_x[0] + size_obs[0], size_x[1] + size_obs[1])
+        size = [size_x[0] + size_obs[0], size_x[1] + size_obs[1]]
         shapes = (shapes_x[0] + shapes_obs[0], shapes_x[1] + shapes_obs[1])
 
         # normalize
@@ -894,7 +924,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
                 value=value, 
                 edge_attr=edge_attr_list_combined, 
                 edge_index=edge_index_list_combined, 
-                size=size #TODO: find out if the size correct, or needs to be changed
+                size=size #TODO: find out if the size correct
                 )
 
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)

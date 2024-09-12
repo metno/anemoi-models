@@ -134,13 +134,18 @@ class GraphEdgeMixin:
             "edge_inc", torch.from_numpy(np.asarray([[src_size], [dst_size]], dtype=np.int64)), persistent=True
         )
 
-    def _register_edges_multi_grid(self, sub_graph: List[dict, dict], src_size: List[int, int], dst_size: List[int, int], trainable_size: int) -> None:
-        for idx in range(len(sub_graph)):
-            self.edge_dim = sub_graph[f"edge_attr_{idx}"].shape[1] + trainable_size
-            self.register_buffer(f"edge_attr_{idx}", sub_graph["edge_attr"], persistent=False)
-            self.register_buffer(f"edge_index_base_{idx}", sub_graph["edge_index"], persistent=False)
+    def _register_edges_multi_grid(self, sub_graph: List[dict], src_size: List[int], dst_size: List[int], trainable_size: int) -> None:
+        """
+            modified version of _register_edges 
+        """
+        assert isinstance(sub_graph, list), f"Expecting list of sub_graphs, got {type(sub_graph)}"
+        self.edge_dim = []
+        for idx, current_sub_graph in enumerate(sub_graph):
+            self.edge_dim.append(current_sub_graph[f"edge_attr"].shape[1] + trainable_size)
+            self.register_buffer(f"edge_attr_{idx}", current_sub_graph["edge_attr"], persistent=False)
+            self.register_buffer(f"edge_index_base_{idx}", current_sub_graph["edge_index"], persistent=False)
             self.register_buffer(
-                "edge_inc_{idx}", torch.from_numpy(np.asarray([[src_size[idx]], [dst_size[idx]]], dtype=np.int64)), persistent=True
+                f"edge_inc_{idx}", torch.from_numpy(np.asarray([[src_size[idx]], [dst_size]], dtype=np.int64)), persistent=True
             )
             
     def _expand_edges(self, edge_index: Adj, edge_inc: Tensor, batch_size: int) -> Adj:
@@ -224,13 +229,13 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
         self.trainable = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr.shape[0])
 
         self.proc = GraphTransformerMapperBlock(
-            hidden_dim,
-            mlp_hidden_ratio * hidden_dim,
-            hidden_dim,
-            num_heads=num_heads,
+            hidden_dim, #in_channels 1024
+            mlp_hidden_ratio * hidden_dim, # hidden_dim 4096 mlp_ratio 4 hidden dim 1024
+            hidden_dim, #out_channels 1024
+            num_heads=num_heads, #16
             edge_dim=self.edge_dim,
-            activation=activation,
-            num_chunks=num_chunks,
+            activation=activation, # gelu
+            num_chunks=num_chunks, # 1
         )
 
         self.offload_layers(cpu_offload)
@@ -409,46 +414,35 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
         return x_src, x_dst, shapes_src, shapes_dst
 
 
-class GraphTransformerFuserMapper(GraphEdgeMixin):
+class GraphTransformerFuserMapper(GraphEdgeMixin, nn.Module):
     def __init__(
             self,
             in_channels_src_x : int = 0,
             in_channels_src_obs : int = 0,
-            in_channels_dst: int = 0,
+            #in_channels_dst: int = 0, #<-- might not be needed?
             hidden_dim: int = 128,
             trainable_size: int = 8,
-            out_channels_dst: Optional[int] = None,
+            #out_channels_dst: Optional[int] = None, #<-- might not be needed?
             num_chunks: int = 1,
-            cpu_offload: bool = False,
+            #cpu_offload: bool = False, #<-- might not be needed?
             activation: str = "GELU",
             num_heads: int = 16,
             mlp_hidden_ratio: int = 4,
-            sub_graph: List[Optional[dict],Optional[dict]] = None,
+            sub_graph: Optional[List[Optional[dict]]] = None,
             src_grid_size: int = 0,
             dst_grid_size: int = 0,
             ) -> None:
-        super().__init__(
-        )
-        """in_channels_x: int,
-        in_channels_obs: int,
-        hidden_dim: int,
-        out_channels: int,
-        edge_dim_x: int,
-        edge_dim_obs: int,
-        num_heads: int = 16,
-        bias: bool = True,
-        activation: str = "GELU",
-        num_chunks: int = 1,
-        update_src_nodes: bool = False,
-        **kwargs: Any"""
+        super().__init__()
 
-        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
+        self._register_edges_multi_grid(sub_graph, src_grid_size, dst_grid_size, trainable_size)
 
-        self.trainable = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr.shape[0])
+        # this should be generalized in future
+        self.trainable0 = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr_0.shape[0])
+        self.trainable1 = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr_1.shape[0])
 
         self.proc = GraphTransformerFuserBlock(
-            in_channels_src_x,
-            in_channels_src_obs,
+            in_channels_src_x, # is this correct?
+            in_channels_src_obs, # applies to this too should it be hidden_dim*mlp_hidden_ratio
             hidden_dim, 
             edge_dim_x=self.edge_dim[0],
             edge_dim_obs= self.edge_dim[1],
@@ -471,17 +465,19 @@ class GraphTransformerFuserMapper(GraphEdgeMixin):
         size_obs = (sum(x[0] for x in shard_shapes_obs[0]), sum(x[0] for x in shard_shapes_obs[1]))
         
         # x grid
-        edge_attr_x = self.trainable(self.edge_attr[0], batch_size)
-        edge_index_x = self._expand_edges(self.edge_index_base[0], self.edge_inc_0, batch_size)
+        edge_attr_x = self.trainable0(self.edge_attr_0, batch_size)
+        edge_index_x = self._expand_edges(self.edge_index_base_0, self.edge_inc_0, batch_size)
         shapes_edge_attr_x = get_shape_shards(edge_attr_x, 0, model_comm_group)
         edge_attr_x= shard_tensor(edge_attr_x, 0, shapes_edge_attr_x, model_comm_group)
 
         # obs grid
-        edge_attr_obs = self.trainable(self.edge_attr[1], batch_size)
-        edge_index_obs = self._expand_edges(self.edge_index_base[1], self.edge_inc_1, batch_size)
+        edge_attr_obs = self.trainable1(self.edge_attr_1, batch_size)
+        edge_index_obs = self._expand_edges(self.edge_index_base_1, self.edge_inc_1, batch_size)
         shapes_edge_attr_obs = get_shape_shards(edge_attr_obs, 0, model_comm_group)
         edge_attr_obs = shard_tensor(edge_attr_obs, 0, shapes_edge_attr_obs, model_comm_group)
-
+        print(shapes_edge_attr_x, shapes_edge_attr_obs)
+        print(size_x, size_obs)
+        exit()
         (x_src, x_dst), edge_attr_x, edge_attr_obs = self.proc(
             x,
             obs,
