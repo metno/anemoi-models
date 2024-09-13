@@ -31,6 +31,10 @@ class IndexCollection:
             [] if config.data.diagnostic is None else OmegaConf.to_container(config.data.diagnostic, resolve=True)
         )
 
+        #Remove entries from forcing and diagnostic that are not in the dataset (quick fix to use IndexCollection with multiple datasets)
+        self.forcing = [var for var in self.forcing if var in name_to_index]
+        self.diagnostic = [var for var in self.diagnostic if var in name_to_index]
+
         assert set(self.diagnostic).isdisjoint(self.forcing), (
             f"Diagnostic and forcing variables overlap: {set(self.diagnostic).intersection(self.forcing)}. ",
             "Please drop them at a dataset-level to exclude them from the training data.",
