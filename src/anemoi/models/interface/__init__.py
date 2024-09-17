@@ -15,6 +15,7 @@ from hydra.utils import instantiate
 
 from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.models.models.encoder_processor_decoder import AnemoiModelEncProcDec
+from anemoi.models.models.fuserobs import AnemoiObsFuser
 from anemoi.models.preprocessing import Processors
 
 
@@ -51,7 +52,7 @@ class AnemoiModelInterface(torch.nn.Module):
             config=self.config, data_indices=self.data_indices, graph_data=self.graph_data
         )
 
-        # Use the forward method of the model directly
+        # Use the forward method of the model  directly
         self.forward = self.model.forward
 
     def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
@@ -81,3 +82,53 @@ class AnemoiModelInterface(torch.nn.Module):
             y_hat = self(x)
 
         return self.post_processors(y_hat, in_place=False)
+    
+class AnemoiFuserInterface(torch.nn.Module):
+
+    def __init__(
+        self, *, config: DotDict, graph_data: dict, statistics: dict, data_indices: dict, metadata: dict 
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.id = str(uuid.uuid4())
+        self.multistep = self.config.training.multistep_input
+        self.graph_data = graph_data
+        self.statistics = statistics
+        self.metadata = metadata
+        self.data_indices = data_indices
+        self._build_model()
+
+    def _build_model(self) -> None:
+
+        assert set(self.statistics.keys()) == set(self.data_indices.keys()), "Mismatch between keys in datamodule statistics and data_indices"
+        assert self.data_indices.keys().issubset(self.graph_data.keys()), "data_indices keys not in graph_data keys"
+
+        processors = {mesh: [[name, instantiate(processor, statistics=self.statistics[mesh], data_indices=self.data_indices[mesh])]
+        for name, processor in self.config.data.processors.items() ]
+        for mesh in self.data_indices.keys()}
+
+        self.pre_processors = {mesh: Processors(processors[mesh]) for mesh in processors.keys()}
+        self.post_processors = {mesh: Processors(processors[mesh], inverse=True) for mesh in processors.keys()}
+
+        self.model = AnemoiObsFuser(
+            config=self.config, data_indices=self.data_indices, graph_data=self.graph_data
+        )
+
+        self.forward = self.model.forward
+
+    def predict_step(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+
+        batch = {mesh: self.pre_processors(batch[mesh], in_place=False) for mesh in batch.keys()}
+
+        with torch.no_grad():
+
+            assert (
+                all(len(values) == 4 for values in batch.values())
+            ), f"Input tensor from one or more of the datasets have incorrect shape: expected 4-dimensional"
+            x = {mesh: batch[mesh][:, 0, self.multi_step, None, ...] for mesh in batch.keys()}
+
+            y_hat = self(x) #Need to implement model forward so it uses dict as input / output
+
+        return {mesh: self.postprocessors[mesh](y_hat[mesh], in_place=False) for mesh in y_hat.keys()}
+
+    

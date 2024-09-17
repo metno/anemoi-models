@@ -26,7 +26,7 @@ class AnemoiObsFuser(AnemoiModelEncProcDec):
             self,
             *,
             config: DotDict,
-            data_indices : IndexCollection,
+            data_indices : dict[str, IndexCollection],
             graph_data: dict 
     ) -> None:
         
