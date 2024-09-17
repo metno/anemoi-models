@@ -21,7 +21,7 @@ LOGGER = logging.getLogger(__name__)
 
 
 
-class AnemoiObsFuser(AnemoiModelEncProcDec):
+class AnemoiObsFuser(nn.Module):
     def __init__(
             self,
             *,
@@ -30,25 +30,42 @@ class AnemoiObsFuser(AnemoiModelEncProcDec):
             graph_data: dict 
     ) -> None:
         
-        super().__init__(config=config, data_indices=data_indices, graph_data=graph_data)
+        super().__init__()
+        # Move these to config later, can also use them for asserts etc.
+        self.data_mesh_name = "stretched_grid"
+        self.obs_mesh_name = "netatmo"
         
+        self.graph = AnemoiGraphSchema(graph_data, config)
+        self.num_channels = config.model.num_channels
+        #TODO implement a separate num_channels for fuser / anemoi decoder - 1024 will probably be overkill
+        self.multi_step = config.training.multistep_input
 
-        num_input_channels = config.model.num_channels_obs
+        self._calculate_shapes_and_indices(data_indices) #TODO:implement
+        self._assert_matching_indices(data_indices) #TODO: implement
+        self._create_trainable_attributes()
+
+        #Register lat/lon
+        for mesh_key in self.graph.mesh_names:
+            self._register_latlon(mesh_key, graph_data[mesh_key]["coords"])
+
+        input_dim = {mesh: self.multi_step * self.num_input_channels[mesh] for mesh in self.num_input_channels.keys()}
+
+        #num_input_channels = config.model.num_channels_obs
         # Encoder data -> hidden
         # we dont want to create an encoder for Netatmo 
         # or yet, if we do, please remove "netatmo". It will create
         # automatically an extra encoder
-        input_dim_x = self.multi_step * self.num_input_channels
-        input_dim_obs = self.multi_step * num_input_channels
+        #input_dim_x = self.multi_step * self.num_input_channels 
+        #input_dim_obs = self.multi_step * num_input_channels
 
         self.encoders = nn.ModuleDict()
         for in_mesh in self.graph.input_meshes:
-            if "netatmo" in in_mesh: # comment out this if you want an extra encoder for the second grid.
+            if self.obs_mesh_name in in_mesh: # comment out this if you want an extra encoder for the second grid.
                 continue
             else:
                 self.encoders[in_mesh] = instantiate(
                     config.model.encoder,
-                    in_channels_src=input_dim_x + self.graph.get_node_emb_size(in_mesh),
+                    in_channels_src=input_dim[in_mesh] + self.graph.get_node_emb_size(in_mesh),
                     in_channels_dst=self.graph.get_node_emb_size(self.graph.hidden_name),
                     hidden_dim=self.num_channels,
                     sub_graph=graph_data[(in_mesh, "to", self.graph.hidden_name)],
@@ -60,30 +77,81 @@ class AnemoiObsFuser(AnemoiModelEncProcDec):
         self.fuser = instantiate(
             config.model.fuser,
             in_channels_src_x = self.num_channels,
-            in_channels_src_obs = input_dim_obs,
+            in_channels_src_obs = input_dim[self.obs_mesh_name],
             hidden_dim = self.num_channels,
-            sub_graph= [graph_data[("era", "to", "hidden")], graph_data[("netatmo","to","hidden")]],
-            src_grid_size = [self.graph.num_nodes["era"], self.graph.num_nodes["netatmo"]],
+            sub_graph = graph_data[(self.obs_mesh_name,"to",self.graph.hidden_name)],
+            src_grid_size =  self.graph.num_nodes[self.obs_mesh_name],
             dst_grid_size = self.graph.num_nodes[self.graph.hidden_name]
         )
-        self.data_indices = data_indices
-        #self.mask = self.mask
-    @cached_property
-    def mask(self):
-        """
-            creates a mask for variables specified. The purpose of this
-            mask is to not include all variables from grid1 when performing
-            cross attention between grid 1 and grid 2.
 
-            NOT NEEDED, WILL BE DELETED
-        """
-        fetch = self.config.data.mask 
-        name_to_index = self.data_indices.data._name_to_index
-        fetched = {name : name_to_index[name] for name in fetch}
-        mask = torch.zeros(len(name_to_index))
-        mask[list(fetched.values())] = 1
-        return mask
+        # Processor hidden -> hidden
+        self.processor = instantiate(
+            config.model.processor,
+            num_channels=self.num_channels,
+            sub_graph=graph_data.get((self.graph.hidden_name, "to", self.graph.hidden_name), None),
+            src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+            dst_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+        )
+
+        # Decoder hidden -> data
+        self.decoders = nn.ModuleDict()
+        for out_mesh in self.graph.output_meshes:
+            self.decoders[out_mesh] = instantiate(
+                config.model.decoder,
+                in_channels_src=self.num_channels,
+                in_channels_dst=input_dim + self.graph.get_node_emb_size(out_mesh),
+                hidden_dim=self.num_channels,
+                out_channels_dst=self.num_output_channels,
+                sub_graph=graph_data[(self.graph.hidden_name, "to", out_mesh)],
+                src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+                dst_grid_size=self.graph.num_nodes[out_mesh],
+            )        
+
+    def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
+        self.num_input_channels = {mesh: len(data_indices[mesh].model.input) for mesh in data_indices.keys()}
+        self.num_output_channels = {mesh: len(data_indices[mesh].model.output) for mesh in data_indices.keys()}
+        self._internal_input_idx = {mesh: data_indices[mesh].model.input.prognostic for mesh in data_indices.keys()}
+        self._internal_output_idx = {mesh: data_indices[mesh].model.output.prognostic for mesh in data_indices.keys()}
+
+    def assert_matching_indices(self, data_indices: dict) -> None:
+        assert (
+            all(len(self._internal_output_idx[mesh]) == len(data_indices[mesh].model.output.full) - 
+                    len(data_indices[mesh].model.output.diagnostic) for mesh in data_indices.keys())
+        )
+        for mesh in data_indices.keys():
+            assert (len(self._internal_output_idx[mesh]) == len(data_indices[mesh].model.output.full) - 
+                    len(data_indices[mesh].model.output.diagnostic)
+                    ), (
+                        f"Mismatch between the internal data indices ({len(self._internal_output_idx[mesh])}) and the output indices "
+                        f"excluding prognostic variables ({len(data_indices[mesh].model.output.full) - len(data_indices[mesh].model.output.diagnostic)}) "
+                        f"in dataset {mesh}"
+                    )
+            assert (len(self._internal_input_idx[mesh]) == len(self._internal_output_idx[mesh])
+                    ), f"Model indices mismatch {self._internal_input_idx[mesh]} != {len(self._internal_output_idx[mesh])} in dataset {mesh}"
     
+    def _create_trainable_attributes(self) -> None:
+        """Create all trainable attributes."""
+        self.trainable_tensors = nn.ModuleDict()
+        for mesh in self.graph.mesh_names:
+            self.trainable_tensors[mesh] = TrainableTensor(
+                trainable_size=self.graph.num_trainable_params[mesh], tensor_size=self.graph.num_nodes[mesh]
+            )    
+
+    def _register_latlon(self, name: str, coords: torch.Tensor) -> None:
+        """Register lat/lon buffers.
+
+        Parameters
+        ----------
+        name : str
+            Name of grid to map
+        coords: torch.Tensor
+            Coordinates of the grid
+        """
+        self.register_buffer(
+            f"latlons_{name}", torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1), persistent=True
+        )
+
+
     def _run_mapper_obs(
         self,
         mapper: nn.Module,
@@ -129,12 +197,19 @@ class AnemoiObsFuser(AnemoiModelEncProcDec):
             use_reentrant=use_reentrant,
         )
     
-    def forward(self, x: Tensor,obs: Tensor, model_comm_group: Optional[ProcessGroup] = None) -> Tensor:
+    def forward(self, x: dict[str, Tensor], model_comm_group: Optional[ProcessGroup] = None) -> Tensor:
         # for now only x as input. This is dependent on how anemoi.dataset.datamodule works
         assert x.shape[0] == obs.shape[0]
-        batch_size = x.shape[0]
-        ensemble_size = x.shape[2]
+        assert (
+            all(next(iter(x).shape[0]) == x[mesh].shape[0] for mesh in x.keys())
+        ), "Batch shape must match for input datasets"
+        batch_size = next(iter(x)).shape[0]
+        assert (
+            all(next(iter(x).shape[2]) == x[mesh].shape[2] for mesh in x.keys())
+        ), "Ensemble shape must match for input datasets"
+        ensemble_size = next(iter(x)).shape[2]
 
+        #TODO: Fix everything below
         input_data = [x,obs]
 
         # add data positional info (lat/lon)
