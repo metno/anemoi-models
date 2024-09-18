@@ -199,7 +199,7 @@ class AnemoiObsFuser(nn.Module):
     
     def forward(self, x: dict[str, Tensor], model_comm_group: Optional[ProcessGroup] = None) -> Tensor:
         # for now only x as input. This is dependent on how anemoi.dataset.datamodule works
-        assert x.shape[0] == obs.shape[0]
+        #assert x.shape[0] == obs.shape[0]
         assert (
             all(next(iter(x).shape[0]) == x[mesh].shape[0] for mesh in x.keys())
         ), "Batch shape must match for input datasets"
@@ -217,10 +217,10 @@ class AnemoiObsFuser(nn.Module):
         # meaning all data is send to latent data space
 
         x_data_latent = {}
-        for in_mesh,data in zip(self.graph.input_meshes, input_data):
+        for in_mesh,data in zip(self.graph.input_meshes, x):
             x_data_latent[in_mesh] = torch.cat(
                 (
-                    einops.rearrange(data, "batch time ensemble grid vars -> (batch ensemble grid) (time vars)"),
+                    einops.rearrange(data[in_mesh], "batch time ensemble grid vars -> (batch ensemble grid) (time vars)"),
                     self.trainable_tensors[in_mesh](getattr(self, f"latlons_{in_mesh}"), batch_size=batch_size),
                 ),
                 dim=-1,  # feature dimension
@@ -257,10 +257,10 @@ class AnemoiObsFuser(nn.Module):
         # temp solution (below)
         out1, x_latent_out = self._run_mapper_obs(
             self.fuser, # this has to be implemented. This is cross-attention
-            x=(x_data_latent["era"], x_hidden_latent),
-            obs=(x_data_latent["netatmo"], x_hidden_latent),
+            x= x_latents,
+            obs=x_data_latent["netatmo"], #, x_hidden_latent),
             batch_size=batch_size,
-            shard_shapes_x=(shard_shapes_data["era"],shard_shapes_hidden),
+            #shard_shapes_x=(shard_shapes_data["era"],shard_shapes_hidden),
             shard_shapes_obs=(shard_shapes_data["netatmo"], shard_shapes_hidden),
             model_comm_group=model_comm_group,
         )

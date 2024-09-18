@@ -638,7 +638,7 @@ class GraphTransformerFuserBaseBlock(nn.Module):
         hidden_dim: int,
         #out_channels: int, out_channels = in_channels_x which is 
         # num_channels which is the output from the encoder
-        edge_dim_x: int,
+        #edge_dim_x: int,
         edge_dim_obs: int,
         num_heads: int = 16,
         bias: bool = True,
@@ -690,7 +690,7 @@ class GraphTransformerFuserBaseBlock(nn.Module):
         self.layer_normalization_obs = nn.LayerNorm(in_channels_obs)
         
         # initialize linear transformation for edges 
-        self.lin_edge_x = nn.Linear(edge_dim_x, num_heads * self.out_channels_conv)  # , bias=False)
+        #self.lin_edge_x = nn.Linear(edge_dim_x, num_heads * self.out_channels_conv)  # , bias=False)
         self.lin_edge_obs = nn.Linear(edge_dim_obs, num_heads * self.out_channels_conv)  # , bias=False)
 
         # initialize layer normalization for outputs
@@ -727,18 +727,20 @@ class GraphTransformerFuserBaseBlock(nn.Module):
             query: Tensor,
             key: Tensor,
             value: Tensor,
-            edges_x: Tensor,
+            #edges_x: Tensor,
             edges_obs: Tensor,
             shapes: tuple,
             batch_size: int,
             model_comm_group: Optional[ProcessGroup] = None,
             ) -> tuple[Tensor, Tensor, Tensor, Tensor, Tensor]:
         """Shards qkv and edges along head dimension."""
+        # This class method will be changed in future 
+
         # should it be an extra shape wrt obs and x?
         # maybe create an another baseclass to include this part?
         shape_src_nodes, shape_dst_nodes, shape_edges = shapes
-
-        query, key, value, edges_x, edges_obs = (
+        # removed egdes_x
+        query, key, value, edges_obs = (
             einops.rearrange(
                 t,
                 "(batch grid) (heads vars) -> batch heads grid vars",
@@ -746,19 +748,20 @@ class GraphTransformerFuserBaseBlock(nn.Module):
                 vars=self.out_channels_conv,
                 batch=batch_size,
             )
-            for t in (query, key, value, edges_x, edges_obs)
+            for t in (query, key, value, edges_obs)
         )
         query = shard_heads(query, shapes=shape_dst_nodes, mgroup=model_comm_group)
         key = shard_heads(key, shapes=shape_src_nodes, mgroup=model_comm_group)
         value = shard_heads(value, shapes=shape_src_nodes, mgroup=model_comm_group)
-        edges_x = shard_heads(edges_x, shapes=shape_edges, mgroup=model_comm_group)
+        #edges_x = shard_heads(edges_x, shapes=shape_edges, mgroup=model_comm_group)
         edges_obs = shard_heads(edges_obs, shapes=shape_edges, mgroup=model_comm_group)
 
-        query, key, value, edges_x, edges_obs = (
-            einops.rearrange(t, "batch heads grid vars -> (batch grid) heads vars") for t in (query, key, value, edges)
+        # edges_x is removed
+        query, key, value, edges_obs = (
+            einops.rearrange(t, "batch heads grid vars -> (batch grid) heads vars") for t in (query, key, value, edges_obs)
         )
-
-        return query, key, value, edges_x, edges_obs
+        # removed edges_x
+        return query, key, value, edges_obs
 
     def shard_output_seq(
         self,
@@ -785,7 +788,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         in_channels_obs: int,
         hidden_dim: int,
         #out_channels: int,
-        edge_dim_x: int,
+        #edge_dim_x: int,
         edge_dim_obs: int,
         num_heads: int = 16,
         bias: bool = True,
@@ -804,7 +807,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             Number of input channels (observation grid).
         out_channels : int
             Number of output channels.
-        edge_dim_x : int,
+        edge_dim_x : int, <-- deprecated
             Edge dimension for x
         edge_dim_obs : int,
             Edge dimension for observation
@@ -822,7 +825,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             in_channels_obs,
             hidden_dim,
             #out_channels,
-            edge_dim_x,
+            #edge_dim_x,
             edge_dim_obs,
             num_heads,
             bias,
@@ -836,23 +839,24 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             self,
             x : OptPairTensor,
             obs : OptPairTensor,
-            edge_attr_x : Tensor,
-            edge_index_x : Adj,
+            #edge_attr_x : Tensor,
+            #edge_index_x : Adj,
             edge_attr_obs : Tensor,
             edge_index_obs: Adj,
-            shapes_x: tuple, # <- should it be shapes_x and shapes_obs?
+            #shapes_x: tuple, # <- should it be shapes_x and shapes_obs?
             shapes_obs: tuple,
             batch_size: int,
             model_comm_group: Optional[ProcessGroup] = None,
-            size_x: Optional[Size] = None,
+            #size_x: Optional[Size] = None,
             size_obs: Optional[Size] = None
             ):
         x_skip = x # saving a copy, for skip connection
         #obs_skip = obs # saving a copy, for skip connection
 
         # combine shape and size
-        size = [size_x[0] + size_obs[0], size_x[1] + size_obs[1]]
-        shapes = (shapes_x[0] + shapes_obs[0], shapes_x[1] + shapes_obs[1])
+        # tmp removed
+        #size = size_x #[size_x[0] + size_obs[0], size_x[1] + size_obs[1]]
+        #shapes = (shapes_x[0] + shapes_obs[0], shapes_x[1] + shapes_obs[1])
 
         # normalize
         x = self.layer_normalization_x(x)
@@ -861,7 +865,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         # generate feature maps for residual connection
         # is this needed?
         x_r = self.lin_self(x)
-        #obs_r = self.lin_self_obs(obs)
+        obs_r = self.lin_self_obs(obs)
 
         # Gather Q (from x input)
         query = self.lin_query(x)
@@ -870,7 +874,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         key = self.lin_key(obs)
         value = self.lin_value(obs)
 
-        edges_x = self.lin_edge_x(edge_attr_x)
+        #edges_x = self.lin_edge_x(edge_attr_x)
         edges_obs = self.lin_edge_obs(edge_attr_obs)
 
         if model_comm_group is not None:
@@ -881,12 +885,12 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         # TODO: find how edges_x and edges_obs heads is going to be sharded (tuple for now, but might not work)
         # TODO: should it be shape_x and shape_obs? find out
         query, key, value, edges_x, edges_obs = self.shard_qkve_heads_obs(
-            query, 
-            key, 
-            value, 
-            edges_x, 
+            query, # query has to be sharded wrt to destination, destination is the same for both obs and x
+            key, # key is being sharded wrt src
+            value, # value is being sharded wrt src
+            #edges_x, 
             edges_obs, 
-            shapes, 
+            shapes_obs, 
             batch_size, 
             model_comm_group
             )
@@ -896,11 +900,11 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         if num_chunks > 1:
             #TODO: is this correct?
             # combine edge attr (x and obs) and index (x and obs)
-            edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
-            edge_attr_list_combined = torch.cat([edges_x, edges_obs], dim = 0)
+            #edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
+            #edge_attr_list_combined = torch.cat([edges_x, edges_obs], dim = 0)
 
-            edge_index_list = torch.tensor_split(edge_index_list_combined, num_chunks, dim=1)
-            edge_attr_list = torch.tensor_split(edge_attr_list_combined, num_chunks, dim=0)
+            edge_index_list = torch.tensor_split(edge_index_obs, num_chunks, dim=1)
+            edge_attr_list = torch.tensor_split(edge_attr_obs, num_chunks, dim=0)
 
             for i in range(num_chunks):
                 out1 = self.cross_attn(
@@ -909,14 +913,14 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
                     value=value,
                     edge_attr=edge_attr_list[i],
                     edge_index=edge_index_list[i],
-                    size=size,
+                    size=size_obs,
                 )
                 if i == 0:
                     out = torch.zeros_like(out1)
                 out = out + out1
         else:
-            edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
-            edge_attr_list_combined = torch.cat([edge_attr_x, edge_attr_obs], dim = 0)
+            #edge_index_list_combined = torch.cat([edge_index_x, edge_index_obs], dim = 1)
+            #edge_attr_list_combined = torch.cat([edge_attr_x, edge_attr_obs], dim = 0)
 
             out = self.cross_attn(
                 query=query, 
@@ -924,7 +928,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
                 value=value, 
                 edge_attr=edge_attr_list_combined, 
                 edge_index=edge_index_list_combined, 
-                size=size #TODO: find out if the size correct
+                size=size_obs #TODO: find out if the size is correct
                 )
 
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
