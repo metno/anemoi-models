@@ -128,6 +128,8 @@ class GraphTransformerConv(MessagePassing):
         size_i: Optional[int],
     ) -> Tensor:
         if edge_attr is not None:
+            print(key_j.shape)
+            print(edge_attr.shape)
             key_j = key_j + edge_attr
 
         alpha = (query_i * key_j).sum(dim=-1) / math.sqrt(self.out_channels)
