@@ -99,9 +99,8 @@ class AnemoiFuserInterface(torch.nn.Module):
         self._build_model()
 
     def _build_model(self) -> None:
-
-        assert set(self.statistics.keys()) == set(self.data_indices.keys()), "Mismatch between keys in datamodule statistics and data_indices"
-        assert self.data_indices.keys().issubset(self.graph_data.keys()), "data_indices keys not in graph_data keys"
+        assert set(self.statistics.keys()) == set(self.data_indices.keys()), "Mismatch between mesh keys in datamodule statistics and data_indices"
+        assert set(self.data_indices.keys()).issubset(set(self.graph_data.keys())), "Mesh keys for data_indices in datamodule are not all in graph mesh keys"
 
         processors = {mesh: [[name, instantiate(processor, statistics=self.statistics[mesh], data_indices=self.data_indices[mesh])]
         for name, processor in self.config.data.processors.items() ]
@@ -129,6 +128,5 @@ class AnemoiFuserInterface(torch.nn.Module):
 
             y_hat = self(x) #Need to implement model forward so it uses dict as input / output
 
-        return {mesh: self.postprocessors[mesh](y_hat[mesh], in_place=False) for mesh in y_hat.keys()}
+        return {mesh: self.post_processors[mesh](y_hat[mesh], in_place=False) for mesh in y_hat.keys()}
 
-    

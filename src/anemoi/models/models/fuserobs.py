@@ -113,7 +113,7 @@ class AnemoiObsFuser(nn.Module):
         self._internal_input_idx = {mesh: data_indices[mesh].model.input.prognostic for mesh in data_indices.keys()}
         self._internal_output_idx = {mesh: data_indices[mesh].model.output.prognostic for mesh in data_indices.keys()}
 
-    def assert_matching_indices(self, data_indices: dict) -> None:
+    def _assert_matching_indices(self, data_indices: dict) -> None:
         assert (
             all(len(self._internal_output_idx[mesh]) == len(data_indices[mesh].model.output.full) - 
                     len(data_indices[mesh].model.output.diagnostic) for mesh in data_indices.keys())
@@ -183,7 +183,7 @@ class AnemoiObsFuser(nn.Module):
 
         Returns
         -------
-        Tensor
+        TensorBatch
             Mapped data
         """
         return checkpoint(

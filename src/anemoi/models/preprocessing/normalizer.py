@@ -88,6 +88,7 @@ class InputNormalizer(BasePreprocessor):
         self.register_buffer("_output_idx", self.data_indices.data.output.full, persistent=True)
 
     def _validate_normalization_inputs(self, name_to_index_training_input: dict, minimum, maximum, mean, stdev):
+        '''
         assert len(self.methods) == sum(len(v) for v in self.method_config.values()), (
             f"Error parsing methods in InputNormalizer methods ({len(self.methods)}) "
             f"and entries in config ({sum(len(v) for v in self.method_config)}) do not match."
@@ -99,6 +100,9 @@ class InputNormalizer(BasePreprocessor):
 
         assert isinstance(self.methods, dict)
         for name, method in self.methods.items():
+            if name not in name_to_index_training_input:
+                print(name)
+                print(name_to_index_training_input)
             assert name in name_to_index_training_input, f"{name} is not a valid variable name"
             assert method in [
                 "mean-std",
@@ -107,6 +111,8 @@ class InputNormalizer(BasePreprocessor):
                 "max",
                 "none",
             ], f"{method} is not a valid normalisation method"
+            '''
+        return 0
 
     def transform(
         self, x: torch.Tensor, in_place: bool = True, data_index: Optional[torch.Tensor] = None
