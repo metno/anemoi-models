@@ -851,6 +851,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             size_obs: Optional[Size] = None
             ):
         x_skip = x # saving a copy, for skip connection
+        obs_skip = obs
         #obs_skip = obs # saving a copy, for skip connection
 
         # combine shape and size
@@ -937,7 +938,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
 
         nodes_new_dst = self.node_dst_mlp(out) + out
 
-        nodes_new_src = self.node_src_mlp(x_skip) + x_skip if self.update_src_nodes else x_skip
+        nodes_new_src = self.node_src_mlp(obs_skip) + obs_skip if self.update_src_nodes else obs_skip
 
         nodes_new = (nodes_new_src, nodes_new_dst)
 

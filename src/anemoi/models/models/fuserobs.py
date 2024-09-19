@@ -343,8 +343,9 @@ class AnemoiObsFuser(nn.Module):
             if out_data_name in self.graph.input_meshes:  # check if the mesh is in the input meshes
                 # residual connection (just for the prognostic variables)
                 x_out[out_data_name][..., self._internal_output_idx[out_data_name]] += x[out_data_name][:, -1, :, :, self._internal_input_idx[out_data_name]]
-
-        return x_out[self.graph.output_meshes[0]]
+        
+        return x_out
+        #return x_out[self.graph.output_meshes[0]]
 
 
 """print("encoder")
