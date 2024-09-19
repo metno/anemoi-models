@@ -237,13 +237,9 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
     ) -> PairTensor:
         size = (sum(x[0] for x in shard_shapes[0]), sum(x[0] for x in shard_shapes[1]))
         edge_attr = self.trainable(self.edge_attr, batch_size)
-        print("Edge attr shape before sharding")
-        print(edge_attr.shape)
         edge_index = self._expand_edges(self.edge_index_base, self.edge_inc, batch_size)
         shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
-        print("Edge attr shape after sharding")
-        print(edge_attr.shape)
 
         x_src, x_dst, shapes_src, shapes_dst = self.pre_process(x, shard_shapes, model_comm_group)
 
@@ -487,13 +483,9 @@ class GraphTransformerFuserMapper(GraphEdgeMixin, nn.Module):
 
         # obs grid
         edge_attr_obs = self.trainable(self.edge_attr, batch_size)
-        print("Edge attr shape before sharding")
-        print(edge_attr_obs.shape)
         edge_index_obs = self._expand_edges(self.edge_index_base, self.edge_inc, batch_size)
         shapes_edge_attr_obs = get_shape_shards(edge_attr_obs, 0, model_comm_group)
         edge_attr_obs = shard_tensor(edge_attr_obs, 0, shapes_edge_attr_obs, model_comm_group)
-        print("Edge attr shape after sharding")
-        print(edge_attr_obs.shape)
 
         #obs_src, obs_dst, shapes_obs_src, shapes_obs_dst = self.pre_process(obs, shard_shapes_obs, model_comm_group)
         # obs grid   |    destination grid | tuple of sharded shapes

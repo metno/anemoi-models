@@ -262,7 +262,6 @@ class AnemoiObsFuser(nn.Module):
                 ),
                 dim=-1,  # feature dimension
             )
-            print(in_mesh)
         
         x_hidden_latent = self.trainable_tensors[self.graph.hidden_name](
             getattr(self, f"latlons_{self.graph.hidden_name}"), batch_size=batch_size
@@ -291,7 +290,7 @@ class AnemoiObsFuser(nn.Module):
             #new_data_latent fuser
         # notice we cannot state era and netatmo. This has to accept n numbers of inputs
         # temp solution (below)
-        x_latent = self._run_mapper_obs(
+        (x_data_latent[self.obs_mesh_name], x_latent) = self._run_mapper_obs(
             self.fuser, # this has to be implemented. This is cross-attention
             x= x_latents[self.data_mesh_name],
             obs=x_data_latent[self.obs_mesh_name], #, x_hidden_latent),
@@ -337,13 +336,13 @@ class AnemoiObsFuser(nn.Module):
                     batch=batch_size,
                     ensemble=ensemble_size,
                 )
-                .to(dtype=x.dtype)
+                .to(dtype=x_out[out_data_name].dtype)
                 .clone()
             )
 
             if out_data_name in self.graph.input_meshes:  # check if the mesh is in the input meshes
                 # residual connection (just for the prognostic variables)
-                x_out[out_data_name][..., self._internal_output_idx] += x[:, -1, :, :, self._internal_input_idx]
+                x_out[out_data_name][..., self._internal_output_idx[out_data_name]] += x[out_data_name][:, -1, :, :, self._internal_input_idx[out_data_name]]
 
         return x_out[self.graph.output_meshes[0]]
 

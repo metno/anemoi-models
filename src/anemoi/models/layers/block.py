@@ -472,8 +472,6 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         model_comm_group: Optional[ProcessGroup] = None,
         size: Optional[Size] = None,
     ):
-        print("GTMB edge_attr shape:")
-        print(edge_attr.shape)
         x_skip = x
 
         x = (
@@ -485,8 +483,6 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         key = self.lin_key(x[0])
         value = self.lin_value(x[0])
         edges = self.lin_edge(edge_attr)
-        print("after lin_edge")
-        print(edges.shape)
 
         if model_comm_group is not None:
             assert (
@@ -494,8 +490,6 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
             ), "Only batch size of 1 is supported when model is sharded across GPUs"
 
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
-        print("after shard_qkve")
-        print(edges.shape)
         # TODO: remove magic number
         num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
 
@@ -503,8 +497,6 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
             edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
             edge_attr_list = torch.tensor_split(edges, num_chunks, dim=0)
             for i in range(num_chunks):
-                print(f"chunk {i}")
-                print(edge_attr_list[i].shape)
                 out1 = self.conv(
                     query=query,
                     key=key,
@@ -517,8 +509,6 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
                     out = torch.zeros_like(out1)
                 out = out + out1
         else:
-            print("jaja")
-            print(edges.shape)
             out = self.conv(query=query, key=key, value=value, edge_attr=edges, edge_index=edge_index, size=size)
 
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
@@ -680,8 +670,6 @@ class GraphTransformerFuserBaseBlock(nn.Module):
         """
         super().__init__() # for nn.Module 
         out_channels = in_channels_x
-        print("in_channels_x")
-        print(in_channels_x)
 
         self.update_src_nodes = update_src_nodes
 
@@ -887,11 +875,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         value = self.lin_value(obs)
 
         #edges_x = self.lin_edge_x(edge_attr_x)
-        print("edge_attr_obs before lin_edge_obs:")
-        print(edge_attr_obs.shape)
         edges_obs = self.lin_edge_obs(edge_attr_obs)
-        print("edges_obs after lin_edge_obs:")
-        print(edges_obs.shape)
         if model_comm_group is not None:
             assert (
                 model_comm_group.size() == 1 or batch_size == 1
@@ -909,8 +893,6 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             batch_size, 
             model_comm_group
             )
-        print("edges_obs after shard_qkve:")
-        print(edges_obs.shape)
 
         num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
 
@@ -924,8 +906,6 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
             edge_attr_list = torch.tensor_split(edges_obs, num_chunks, dim=0)
 
             for i in range(num_chunks):
-                print(f"chunk {i}:")
-                print(f"edge_attr_list[i].shape: {edge_attr_list[i].shape}")
                 out1 = self.cross_attn(
                     query=query,
                     key=key,
