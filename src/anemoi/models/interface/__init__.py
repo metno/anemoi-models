@@ -17,6 +17,7 @@ from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.models.models.encoder_processor_decoder import AnemoiModelEncProcDec
 from anemoi.models.models.fuserobs import AnemoiObsFuser
 from anemoi.models.preprocessing import Processors
+import torch.nn as nn
 
 
 class AnemoiModelInterface(torch.nn.Module):
@@ -106,8 +107,9 @@ class AnemoiFuserInterface(torch.nn.Module):
         for name, processor in self.config.data.processors.items() ]
         for mesh in self.data_indices.keys()}
 
-        self.pre_processors = {mesh: Processors(processors[mesh]) for mesh in processors.keys()}
-        self.post_processors = {mesh: Processors(processors[mesh], inverse=True) for mesh in processors.keys()}
+        #Use module dict here so the buffers in Processors are moved to gpu with the model
+        self.pre_processors = nn.ModuleDict({mesh: Processors(processors[mesh]) for mesh in processors.keys()})
+        self.post_processors = nn.ModuleDict({mesh: Processors(processors[mesh], inverse=True) for mesh in processors.keys()})
 
         self.model = AnemoiObsFuser(
             config=self.config, data_indices=self.data_indices, graph_data=self.graph_data

@@ -336,7 +336,7 @@ class AnemoiObsFuser(nn.Module):
                     batch=batch_size,
                     ensemble=ensemble_size,
                 )
-                .to(dtype=x_out[out_data_name].dtype)
+                .to(dtype=x[out_data_name].dtype)
                 .clone()
             )
 
