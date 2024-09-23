@@ -96,16 +96,31 @@ class AnemoiObsFuser(nn.Module):
         # Decoder hidden -> data
         self.decoders = nn.ModuleDict()
         for out_mesh in self.graph.output_meshes:
-            self.decoders[out_mesh] = instantiate(
-                config.model.decoder,
-                in_channels_src=self.num_channels,
-                in_channels_dst=input_dim[out_mesh] + self.graph.get_node_emb_size(out_mesh),
-                hidden_dim=self.num_channels,
-                out_channels_dst=self.num_output_channels[out_mesh],
-                sub_graph=graph_data[(self.graph.hidden_name, "to", out_mesh)],
-                src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
-                dst_grid_size=self.graph.num_nodes[out_mesh],
-            )        
+            # Sparse decoder with fewer channels for obs decoder
+            if out_mesh == self.obs_mesh_name:
+                self.decoders[out_mesh] = instantiate(
+                    config.model.decoder_sparse,
+                    in_channels_src=self.num_channels,
+                    in_channels_dst=input_dim[out_mesh] + self.graph.get_node_emb_size(out_mesh),
+                    hidden_dim=self.num_channels,
+                    out_channels_dst=self.num_output_channels[out_mesh],
+                    sub_graph=graph_data[(self.graph.hidden_name, "to", out_mesh)],
+                    src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+                    dst_grid_size=self.graph.num_nodes[out_mesh],
+                )
+            # Generic decoder for stretched grid
+            else:
+                self.decoders[out_mesh] = instantiate(
+                    config.model.decoder,
+                    in_channels_src=self.num_channels,
+                    in_channels_dst=input_dim[out_mesh] + self.graph.get_node_emb_size(out_mesh),
+                    hidden_dim=self.num_channels,
+                    out_channels_dst=self.num_output_channels[out_mesh],
+                    sub_graph=graph_data[(self.graph.hidden_name, "to", out_mesh)],
+                    src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+                    dst_grid_size=self.graph.num_nodes[out_mesh],
+                )
+
 
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
         self.num_input_channels = {mesh: len(data_indices[mesh].model.input) for mesh in data_indices.keys()}

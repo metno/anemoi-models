@@ -387,6 +387,16 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
             dst_grid_size=dst_grid_size,
         )
 
+        self.proc = GraphTransformerMapperBlock(
+            hidden_dim, #in_channels 1024
+            mlp_hidden_ratio * hidden_dim, # hidden_dim 4096 mlp_ratio 4 hidden dim 1024
+            hidden_dim, #out_channels 1024
+            num_heads=num_heads, #16
+            edge_dim=self.edge_dim,
+            activation=activation, # gelu
+            num_chunks=num_chunks, # 1
+        )
+
         self.node_data_extractor = nn.Sequential(
             nn.LayerNorm(self.hidden_dim), nn.Linear(self.hidden_dim, self.out_channels_dst)
         )
@@ -790,3 +800,56 @@ class GNNBackwardMapper(BackwardMapperPostProcessMixin, GNNBaseMapper):
 
         _, x_dst = super().forward(x, batch_size, shard_shapes, model_comm_group)
         return x_dst
+
+
+class GraphTransformerSparseBackwardMapper(GraphTransformerBackwardMapper):
+        
+    def __init__(
+        self,
+        in_channels_src: int = 0,
+        in_channels_dst: int = 0,
+        hidden_dim: int = 128,
+        decoder_hidden_dim: int = 12,
+        trainable_size: int = 8,
+        out_channels_dst: Optional[int] = None,
+        num_chunks: int = 1,
+        cpu_offload: bool = False,
+        activation: str = "GELU",
+        num_heads: int = 16,
+        mlp_hidden_ratio: int = 4,
+        sub_graph: Optional[dict] = None,
+        src_grid_size: int = 0,
+        dst_grid_size: int = 0,
+    ) -> None:
+        
+        super().__init__(
+            in_channels_src,
+            in_channels_dst,
+            hidden_dim,
+            trainable_size,
+            out_channels_dst=out_channels_dst,
+            num_chunks=num_chunks,
+            cpu_offload=cpu_offload,
+            activation=activation,
+            num_heads=num_heads,
+            mlp_hidden_ratio=mlp_hidden_ratio,
+            sub_graph=sub_graph,
+            src_grid_size=src_grid_size,
+            dst_grid_size=dst_grid_size,
+        )
+
+        self.proc = GraphTransformerMapperBlock(
+            hidden_dim, #in_channels 1024
+            mlp_hidden_ratio * decoder_hidden_dim, 
+            decoder_hidden_dim, 
+            num_heads=num_heads, 
+            edge_dim=self.edge_dim,
+            activation=activation, # gelu
+            num_chunks=num_chunks, # 1
+        )
+
+        self.node_data_extractor = nn.Sequential(
+            nn.LayerNorm(decoder_hidden_dim), nn.Linear(decoder_hidden_dim, self.out_channels_dst)
+        )
+
+        self.emb_nodes_dst = nn.Linear(self.in_channels_dst, decoder_hidden_dim)
