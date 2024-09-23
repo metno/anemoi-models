@@ -387,16 +387,6 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
             dst_grid_size=dst_grid_size,
         )
 
-        self.proc = GraphTransformerMapperBlock(
-            hidden_dim, #in_channels 1024
-            mlp_hidden_ratio * hidden_dim, # hidden_dim 4096 mlp_ratio 4 hidden dim 1024
-            hidden_dim, #out_channels 1024
-            num_heads=num_heads, #16
-            edge_dim=self.edge_dim,
-            activation=activation, # gelu
-            num_chunks=num_chunks, # 1
-        )
-
         self.node_data_extractor = nn.Sequential(
             nn.LayerNorm(self.hidden_dim), nn.Linear(self.hidden_dim, self.out_channels_dst)
         )
