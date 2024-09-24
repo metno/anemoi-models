@@ -262,7 +262,6 @@ class AnemoiObsFuser(nn.Module):
         ), "Ensemble shape must match for input datasets"
         ensemble_size = next(iter(x.values())).shape[2]
 
-        #TODO: Fix everything below
 
         # add data positional info (lat/lon)
         # includes all extra grids, i.e era-meps and netatmo
@@ -358,7 +357,7 @@ class AnemoiObsFuser(nn.Module):
             if out_data_name in self.graph.input_meshes:  # check if the mesh is in the input meshes
                 # residual connection (just for the prognostic variables)
                 x_out[out_data_name][..., self._internal_output_idx[out_data_name]] += x[out_data_name][:, -1, :, :, self._internal_input_idx[out_data_name]]
-        
+
         return x_out
         #return x_out[self.graph.output_meshes[0]]
 

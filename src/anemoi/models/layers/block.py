@@ -319,7 +319,7 @@ class GraphTransformerBaseBlock(BaseBlock, ABC):
         self.lin_key = nn.Linear(in_channels, num_heads * self.out_channels_conv)
         self.lin_query = nn.Linear(in_channels, num_heads * self.out_channels_conv)
         self.lin_value = nn.Linear(in_channels, num_heads * self.out_channels_conv)
-        self.lin_self = nn.Linear(in_channels, num_heads * self.out_channels_conv, bias=bias)
+        self.lin_self = nn.Linear(in_channels, num_heads * self.out_channels_conv, bias=bias) 
         self.lin_edge = nn.Linear(edge_dim, num_heads * self.out_channels_conv)  # , bias=False)
 
         self.conv = GraphTransformerConv(out_channels=self.out_channels_conv)
@@ -473,7 +473,6 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         size: Optional[Size] = None,
     ):
         x_skip = x
-
         x = (
             self.layer_norm1(x[0]),
             self.layer_norm2(x[1]),
@@ -514,13 +513,12 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
         out = self.projection(out + x_r)
 
-        out = out + x_skip[1]
+#        out = out + x_skip[1]
         nodes_new_dst = self.node_dst_mlp(out) + out
 
         nodes_new_src = self.node_src_mlp(x_skip[0]) + x_skip[0] if self.update_src_nodes else x_skip[0]
 
         nodes_new = (nodes_new_src, nodes_new_dst)
-
         return nodes_new, edge_attr
 
 class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
@@ -943,3 +941,111 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         nodes_new = (nodes_new_src, nodes_new_dst)
 
         return nodes_new, edge_attr_obs
+
+# Remove a skip connection from forward, does not make sense to include when we 
+# reduce the number of channels      
+class GraphTransformerSparseMapperBlock(GraphTransformerMapperBlock):
+
+    def __init__(
+        self,
+        in_channels: int,
+        hidden_dim: int,
+        out_channels: int,
+        edge_dim: int,
+        num_heads: int = 16,
+        bias: bool = True,
+        activation: str = "GELU",
+        num_chunks: int = 1,
+        update_src_nodes: bool = False,
+        **kwargs,
+    ) -> None:
+        """Initialize GraphTransformerBlock.
+
+        Parameters
+        ----------
+        in_channels : int
+            Number of input channels.
+        out_channels : int
+            Number of output channels.
+        edge_dim : int,
+            Edge dimension
+        num_heads : int,
+            Number of heads
+        bias : bool, by default True,
+            Add bias or not
+        activation : str, optional
+            Activation function, by default "GELU"
+        update_src_nodes: bool, by default False
+            Update src if src and dst nodes are given
+        """
+        super().__init__(
+            in_channels=in_channels,
+            hidden_dim=hidden_dim,
+            out_channels=out_channels,
+            edge_dim=edge_dim,
+            num_heads=num_heads,
+            bias=bias,
+            activation=activation,
+            num_chunks=num_chunks,
+            update_src_nodes=update_src_nodes,
+            **kwargs,
+        )
+    
+    def forward(
+        self,
+        x: OptPairTensor,
+        edge_attr: Tensor,
+        edge_index: Adj,
+        shapes: tuple,
+        batch_size: int,
+        model_comm_group: Optional[ProcessGroup] = None,
+        size: Optional[Size] = None,
+    ):
+        x_skip = x
+        x = (
+            self.layer_norm1(x[0]),
+            self.layer_norm2(x[1]),
+        )  # Why does this use layer_norm2? And only is a mapper thing?
+        x_r = self.lin_self(x[1])
+        query = self.lin_query(x[1])
+        key = self.lin_key(x[0])
+        value = self.lin_value(x[0])
+        edges = self.lin_edge(edge_attr)
+
+        if model_comm_group is not None:
+            assert (
+                model_comm_group.size() == 1 or batch_size == 1
+            ), "Only batch size of 1 is supported when model is sharded across GPUs"
+
+        query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
+        # TODO: remove magic number
+        num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
+
+        if num_chunks > 1:
+            edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
+            edge_attr_list = torch.tensor_split(edges, num_chunks, dim=0)
+            for i in range(num_chunks):
+                out1 = self.conv(
+                    query=query,
+                    key=key,
+                    value=value,
+                    edge_attr=edge_attr_list[i],
+                    edge_index=edge_index_list[i],
+                    size=size,
+                )
+                if i == 0:
+                    out = torch.zeros_like(out1)
+                out = out + out1
+        else:
+            out = self.conv(query=query, key=key, value=value, edge_attr=edges, edge_index=edge_index, size=size)
+
+        out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
+        out = self.projection(out + x_r)
+
+#        out = out + x_skip[1]
+        nodes_new_dst = self.node_dst_mlp(out) + out
+
+        nodes_new_src = self.node_src_mlp(x_skip[0]) + x_skip[0] if self.update_src_nodes else x_skip[0]
+
+        nodes_new = (nodes_new_src, nodes_new_dst)
+        return nodes_new, edge_attr

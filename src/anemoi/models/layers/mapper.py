@@ -27,6 +27,7 @@ from anemoi.models.distributed.shapes import get_shape_shards
 from anemoi.models.layers.block import GraphConvMapperBlock
 from anemoi.models.layers.block import GraphTransformerMapperBlock
 from anemoi.models.layers.block import GraphTransformerFuserBlock
+from anemoi.models.layers.block import GraphTransformerSparseMapperBlock
 from anemoi.models.layers.graph import TrainableTensor
 from anemoi.models.layers.mlp import MLP
 
@@ -235,11 +236,13 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
         shard_shapes: tuple[tuple[int], tuple[int]],
         model_comm_group: Optional[ProcessGroup] = None,
     ) -> PairTensor:
+
         size = (sum(x[0] for x in shard_shapes[0]), sum(x[0] for x in shard_shapes[1]))
         edge_attr = self.trainable(self.edge_attr, batch_size)
         edge_index = self._expand_edges(self.edge_index_base, self.edge_inc, batch_size)
         shapes_edge_attr = get_shape_shards(edge_attr, 0, model_comm_group)
         edge_attr = shard_tensor(edge_attr, 0, shapes_edge_attr, model_comm_group)
+
 
         x_src, x_dst, shapes_src, shapes_dst = self.pre_process(x, shard_shapes, model_comm_group)
 
@@ -254,6 +257,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
         )
 
         x_dst = self.post_process(x_dst, shapes_dst, model_comm_group)
+
 
         return x_dst
 
@@ -791,7 +795,7 @@ class GNNBackwardMapper(BackwardMapperPostProcessMixin, GNNBaseMapper):
         _, x_dst = super().forward(x, batch_size, shard_shapes, model_comm_group)
         return x_dst
 
-
+# Overwrite Backward mapper so we can pass other arguments to self.proc (fewer channels)
 class GraphTransformerSparseBackwardMapper(GraphTransformerBackwardMapper):
         
     def __init__(
@@ -799,7 +803,7 @@ class GraphTransformerSparseBackwardMapper(GraphTransformerBackwardMapper):
         in_channels_src: int = 0,
         in_channels_dst: int = 0,
         hidden_dim: int = 128,
-        decoder_hidden_dim: int = 12,
+        decoder_hidden_dim: int = 32,
         trainable_size: int = 8,
         out_channels_dst: Optional[int] = None,
         num_chunks: int = 1,
@@ -828,7 +832,7 @@ class GraphTransformerSparseBackwardMapper(GraphTransformerBackwardMapper):
             dst_grid_size=dst_grid_size,
         )
 
-        self.proc = GraphTransformerMapperBlock(
+        self.proc = GraphTransformerSparseMapperBlock(
             hidden_dim, #in_channels 1024
             mlp_hidden_ratio * decoder_hidden_dim, 
             decoder_hidden_dim, 
@@ -841,5 +845,5 @@ class GraphTransformerSparseBackwardMapper(GraphTransformerBackwardMapper):
         self.node_data_extractor = nn.Sequential(
             nn.LayerNorm(decoder_hidden_dim), nn.Linear(decoder_hidden_dim, self.out_channels_dst)
         )
+        
 
-        self.emb_nodes_dst = nn.Linear(self.in_channels_dst, decoder_hidden_dim)
