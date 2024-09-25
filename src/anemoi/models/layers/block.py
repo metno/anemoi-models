@@ -513,7 +513,7 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
         out = self.projection(out + x_r)
 
-#        out = out + x_skip[1]
+        out = out + x_skip[1]
         nodes_new_dst = self.node_dst_mlp(out) + out
 
         nodes_new_src = self.node_src_mlp(x_skip[0]) + x_skip[0] if self.update_src_nodes else x_skip[0]
