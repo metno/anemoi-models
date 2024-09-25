@@ -863,7 +863,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         
         # generate feature maps for residual connection
         # is this needed?
-        x_r = self.lin_self(x)
+#        x_r = self.lin_self(x)
 #        obs_r = self.lin_self_obs(obs)
 
         # Gather Q (from x input)
@@ -930,13 +930,15 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
                 )
 
         out = self.shard_output_seq(out, shapes_obs, batch_size, model_comm_group)
-        out = self.fuse_projection_layer(out + x_r) # + obs_r) dont think obs_r is needed
+        # commented out x_r no residual connection to out in proj layer
+        out = self.fuse_projection_layer(out) # + x_r) # + obs_r) dont think obs_r is needed
 
 #        out = out + x_skip #+ obs_skip # do we need skip connection for obs??
 
         nodes_new_dst = self.node_dst_mlp(out) + out
-
-        nodes_new_src = self.node_src_mlp(obs_skip) + obs_skip if self.update_src_nodes else obs_skip
+        # commented out obs_skip
+        # to be added later if obs_skip is needed: + obs_skip
+        nodes_new_src = self.node_src_mlp(obs_skip) if self.update_src_nodes else obs_skip
 
         nodes_new = (nodes_new_src, nodes_new_dst)
 
