@@ -932,7 +932,7 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         out = self.shard_output_seq(out, shapes_obs, batch_size, model_comm_group)
         out = self.fuse_projection_layer(out + x_r) # + obs_r) dont think obs_r is needed
 
-        out = out + x_skip #+ obs_skip # do we need skip connection for obs??
+#        out = out + x_skip #+ obs_skip # do we need skip connection for obs??
 
         nodes_new_dst = self.node_dst_mlp(out) + out
 
