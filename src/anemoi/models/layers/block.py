@@ -695,7 +695,7 @@ class GraphTransformerFuserBaseBlock(nn.Module):
         self.layer_norm_output = nn.LayerNorm(out_channels) # layer normalize output after fuse
 
         # initialize fuse for projection layer
-        self.fuse_projection_layer = nn.Linear(out_channels, out_channels)
+        self.projection = nn.Linear(out_channels, out_channels)
 
         # initialize GraphTransformerConv (cross-attention)
         self.cross_attn = GraphTransformerConv(out_channels=out_channels)
@@ -863,13 +863,8 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
         
         # generate feature maps for residual connection
         # is this needed?
-#        x_r = self.lin_self(x)
-#        obs_r = self.lin_self_obs(obs)
-
-        # Gather Q (from x input)
+        x_r = self.lin_self(x)
         query = self.lin_query(x)
-
-        # Gather K,V (from obs input)
         key = self.lin_key(obs)
         value = self.lin_value(obs)
 
@@ -931,9 +926,9 @@ class GraphTransformerFuserBlock(GraphTransformerFuserBaseBlock):
 
         out = self.shard_output_seq(out, shapes_obs, batch_size, model_comm_group)
         # commented out x_r no residual connection to out in proj layer
-        out = self.fuse_projection_layer(out) # + x_r) # + obs_r) dont think obs_r is needed
+        out = self.projection(out + x_r) 
 
-#        out = out + x_skip #+ obs_skip # do we need skip connection for obs??
+        out = out + x_skip
 
         nodes_new_dst = self.node_dst_mlp(out) + out
         # commented out obs_skip

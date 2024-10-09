@@ -304,6 +304,7 @@ class AnemoiObsFuser(nn.Module):
             #new_data_latent fuser
         # notice we cannot state era and netatmo. This has to accept n numbers of inputs
         # temp solution (below)
+                
         (x_data_latent[self.obs_mesh_name], x_latent) = self._run_mapper_obs(
             self.fuser, # this has to be implemented. This is cross-attention
             x= x_latents[self.data_mesh_name],
@@ -313,7 +314,7 @@ class AnemoiObsFuser(nn.Module):
             shard_shapes_obs=(shard_shapes_data["netatmo"], shard_shapes_hidden),
             model_comm_group=model_comm_group,
         )
-
+        
              
         # each latent data has to be sent to
         # fuser (simple GT for cross attention)
@@ -323,6 +324,7 @@ class AnemoiObsFuser(nn.Module):
 #        x_latent = torch.stack(new_x_latents).sum(dim=0) if len(new_x_latents) > 1 else new_x_latents[0]
 
         x_latent_proc = self.processor(
+#            x_latents[self.data_mesh_name],
             x_latent,
             batch_size=batch_size,
             shard_shapes=shard_shapes_hidden,
@@ -330,7 +332,7 @@ class AnemoiObsFuser(nn.Module):
         )
 
         # add skip connection (hidden -> hidden)
-        x_latent_proc = x_latent_proc + x_latent
+        x_latent_proc = x_latent_proc + x_latents[self.data_mesh_name]
 
         # Run decoders
         x_out = {}
