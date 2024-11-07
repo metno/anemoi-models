@@ -1,12 +1,11 @@
-# (C) Copyright 2024 Anemoi contributors.
+# (C) Copyright 2024 ECMWF.
 #
 # This software is licensed under the terms of the Apache Licence Version 2.0
 # which can be obtained at http://www.apache.org/licenses/LICENSE-2.0.
-#
 # In applying this licence, ECMWF does not waive the privileges and immunities
 # granted to it by virtue of its status as an intergovernmental organisation
 # nor does it submit to any jurisdiction.
-
+#
 
 import logging
 from typing import Optional
@@ -19,9 +18,10 @@ from torch import Tensor
 from torch import nn
 from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
-from torch_geometric.data import HeteroData
 
+from anemoi.models.data_indices.collection import IndexCollection
 from anemoi.models.distributed.shapes import get_shape_shards
+from anemoi.models.graph import AnemoiGraphSchema
 from anemoi.models.layers.graph import TrainableTensor
 
 LOGGER = logging.getLogger(__name__)
@@ -33,132 +33,111 @@ class AnemoiModelEncProcDec(nn.Module):
     def __init__(
         self,
         *,
-        model_config: DotDict,
-        data_indices: dict,
-        graph_data: HeteroData,
+        config: DotDict,
+        data_indices: IndexCollection,
+        graph_data: dict,
     ) -> None:
         """Initializes the graph neural network.
 
         Parameters
         ----------
-        model_config : DotDict
-            Model configuration
-        data_indices : dict
+        config : DictConfig
+            Job configuration
+        data_indices : IndexCollection
             Data indices
-        graph_data : HeteroData
+        graph_data : dict
             Graph definition
         """
         super().__init__()
 
-        self._graph_data = graph_data
-        self._graph_name_data = model_config.graph.data
-        self._graph_name_hidden = model_config.graph.hidden
+        self.graph = AnemoiGraphSchema(graph_data, config)
+        self.num_channels = config.model.num_channels
+        self.multi_step = config.training.multistep_input
 
         self._calculate_shapes_and_indices(data_indices)
         self._assert_matching_indices(data_indices)
-
-        self.multi_step = model_config.training.multistep_input
-
-        self._define_tensor_sizes(model_config)
-
-        # Create trainable tensors
         self._create_trainable_attributes()
 
-        # Register lat/lon of nodes
-        self._register_latlon("data", self._graph_name_data)
-        self._register_latlon("hidden", self._graph_name_hidden)
+        # Register lat/lon
+        for mesh_key in self.graph.mesh_names:
+            self._register_latlon(mesh_key, graph_data[mesh_key]["coords"])
 
-        self.data_indices = data_indices
-
-        self.num_channels = model_config.model.num_channels
-
-        input_dim = self.multi_step * self.num_input_channels + self.latlons_data.shape[1] + self.trainable_data_size
+        input_dim = self.multi_step * self.num_input_channels
 
         # Encoder data -> hidden
-        self.encoder = instantiate(
-            model_config.model.encoder,
-            in_channels_src=input_dim,
-            in_channels_dst=self.latlons_hidden.shape[1] + self.trainable_hidden_size,
-            hidden_dim=self.num_channels,
-            sub_graph=self._graph_data[(self._graph_name_data, "to", self._graph_name_hidden)],
-            src_grid_size=self._data_grid_size,
-            dst_grid_size=self._hidden_grid_size,
-        )
+        self.encoders = nn.ModuleDict()
+        for in_mesh in self.graph.input_meshes:
+            self.encoders[in_mesh] = instantiate(
+                config.model.encoder,
+                in_channels_src=input_dim + self.graph.get_node_emb_size(in_mesh),
+                in_channels_dst=self.graph.get_node_emb_size(self.graph.hidden_name),
+                hidden_dim=self.num_channels,
+                sub_graph=graph_data[(in_mesh, "to", self.graph.hidden_name)],
+                src_grid_size=self.graph.num_nodes[in_mesh],
+                dst_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+            )
 
         # Processor hidden -> hidden
         self.processor = instantiate(
-            model_config.model.processor,
+            config.model.processor,
             num_channels=self.num_channels,
-            sub_graph=self._graph_data[(self._graph_name_hidden, "to", self._graph_name_hidden)],
-            src_grid_size=self._hidden_grid_size,
-            dst_grid_size=self._hidden_grid_size,
+            sub_graph=graph_data.get((self.graph.hidden_name, "to", self.graph.hidden_name), None),
+            src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+            dst_grid_size=self.graph.num_nodes[self.graph.hidden_name],
         )
 
         # Decoder hidden -> data
-        self.decoder = instantiate(
-            model_config.model.decoder,
-            in_channels_src=self.num_channels,
-            in_channels_dst=input_dim,
-            hidden_dim=self.num_channels,
-            out_channels_dst=self.num_output_channels,
-            sub_graph=self._graph_data[(self._graph_name_hidden, "to", self._graph_name_data)],
-            src_grid_size=self._hidden_grid_size,
-            dst_grid_size=self._data_grid_size,
-        )
-
-        # Instantiation of model output bounding functions (e.g., to ensure outputs like TP are positive definite)
-        self.boundings = nn.ModuleList(
-            [
-                instantiate(cfg, name_to_index=self.data_indices.internal_model.output.name_to_index)
-                for cfg in getattr(model_config.model, "bounding", [])
-            ]
-        )
+        self.decoders = nn.ModuleDict()
+        for out_mesh in self.graph.output_meshes:
+            self.decoders[out_mesh] = instantiate(
+                config.model.decoder,
+                in_channels_src=self.num_channels,
+                in_channels_dst=input_dim + self.graph.get_node_emb_size(out_mesh),
+                hidden_dim=self.num_channels,
+                out_channels_dst=self.num_output_channels,
+                sub_graph=graph_data[(self.graph.hidden_name, "to", out_mesh)],
+                src_grid_size=self.graph.num_nodes[self.graph.hidden_name],
+                dst_grid_size=self.graph.num_nodes[out_mesh],
+            )
 
     def _calculate_shapes_and_indices(self, data_indices: dict) -> None:
-        self.num_input_channels = len(data_indices.internal_model.input)
-        self.num_output_channels = len(data_indices.internal_model.output)
-        self._internal_input_idx = data_indices.internal_model.input.prognostic
-        self._internal_output_idx = data_indices.internal_model.output.prognostic
+        self.num_input_channels = len(data_indices.model.input)
+        self.num_output_channels = len(data_indices.model.output)
+        self._internal_input_idx = data_indices.model.input.prognostic
+        self._internal_output_idx = data_indices.model.output.prognostic
 
     def _assert_matching_indices(self, data_indices: dict) -> None:
 
-        assert len(self._internal_output_idx) == len(data_indices.internal_model.output.full) - len(
-            data_indices.internal_model.output.diagnostic
+        assert len(self._internal_output_idx) == len(data_indices.model.output.full) - len(
+            data_indices.model.output.diagnostic
         ), (
-            f"Mismatch between the internal data indices ({len(self._internal_output_idx)}) and "
-            f"the internal output indices excluding diagnostic variables "
-            f"({len(data_indices.internal_model.output.full) - len(data_indices.internal_model.output.diagnostic)})",
+            f"Mismatch between the internal data indices ({len(self._internal_output_idx)}) and the output indices excluding "
+            f"diagnostic variables ({len(data_indices.model.output.full) - len(data_indices.model.output.diagnostic)})",
         )
         assert len(self._internal_input_idx) == len(
             self._internal_output_idx,
-        ), f"Internal model indices must match {self._internal_input_idx} != {self._internal_output_idx}"
+        ), f"Model indices must match {self._internal_input_idx} != {self._internal_output_idx}"
 
-    def _define_tensor_sizes(self, config: DotDict) -> None:
-        self._data_grid_size = self._graph_data[self._graph_name_data].num_nodes
-        self._hidden_grid_size = self._graph_data[self._graph_name_hidden].num_nodes
+    def _create_trainable_attributes(self) -> None:
+        """Create all trainable attributes."""
+        self.trainable_tensors = nn.ModuleDict()
+        for mesh in self.graph.mesh_names:
+            self.trainable_tensors[mesh] = TrainableTensor(
+                trainable_size=self.graph.num_trainable_params[mesh], tensor_size=self.graph.num_nodes[mesh]
+            )
 
-        self.trainable_data_size = config.model.trainable_parameters.data
-        self.trainable_hidden_size = config.model.trainable_parameters.hidden
-
-    def _register_latlon(self, name: str, nodes: str) -> None:
+    def _register_latlon(self, name: str, coords: torch.Tensor) -> None:
         """Register lat/lon buffers.
 
         Parameters
         ----------
         name : str
-            Name to store the lat-lon coordinates of the nodes.
-        nodes : str
-            Name of nodes to map
+            Name of grid to map
+        coords: torch.Tensor
+            Coordinates of the grid
         """
-        coords = self._graph_data[nodes].x
-        sin_cos_coords = torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1)
-        self.register_buffer(f"latlons_{name}", sin_cos_coords, persistent=True)
-
-    def _create_trainable_attributes(self) -> None:
-        """Create all trainable attributes."""
-        self.trainable_data = TrainableTensor(trainable_size=self.trainable_data_size, tensor_size=self._data_grid_size)
-        self.trainable_hidden = TrainableTensor(
-            trainable_size=self.trainable_hidden_size, tensor_size=self._hidden_grid_size
+        self.register_buffer(
+            f"latlons_{name}", torch.cat([torch.sin(coords), torch.cos(coords)], dim=-1), persistent=True
         )
 
     def _run_mapper(
@@ -207,28 +186,38 @@ class AnemoiModelEncProcDec(nn.Module):
         ensemble_size = x.shape[2]
 
         # add data positional info (lat/lon)
-        x_data_latent = torch.cat(
-            (
-                einops.rearrange(x, "batch time ensemble grid vars -> (batch ensemble grid) (time vars)"),
-                self.trainable_data(self.latlons_data, batch_size=batch_size),
-            ),
-            dim=-1,  # feature dimension
-        )
+        x_data_latent = {}
+        for in_mesh in self.graph.input_meshes:
+            x_data_latent[in_mesh] = torch.cat(
+                (
+                    einops.rearrange(x, "batch time ensemble grid vars -> (batch ensemble grid) (time vars)"),
+                    self.trainable_tensors[in_mesh](getattr(self, f"latlons_{in_mesh}"), batch_size=batch_size),
+                ),
+                dim=-1,  # feature dimension
+            )
 
-        x_hidden_latent = self.trainable_hidden(self.latlons_hidden, batch_size=batch_size)
+        x_hidden_latent = self.trainable_tensors[self.graph.hidden_name](
+            getattr(self, f"latlons_{self.graph.hidden_name}"), batch_size=batch_size
+        )
 
         # get shard shapes
-        shard_shapes_data = get_shape_shards(x_data_latent, 0, model_comm_group)
+        shard_shapes_data = {name: get_shape_shards(data, 0, model_comm_group) for name, data in x_data_latent.items()}
         shard_shapes_hidden = get_shape_shards(x_hidden_latent, 0, model_comm_group)
 
-        # Run encoder
-        x_data_latent, x_latent = self._run_mapper(
-            self.encoder,
-            (x_data_latent, x_hidden_latent),
-            batch_size=batch_size,
-            shard_shapes=(shard_shapes_data, shard_shapes_hidden),
-            model_comm_group=model_comm_group,
-        )
+        # Run encoders
+        x_latents = []
+        for in_data_name, encoder in self.encoders.items():
+            x_data_latent[in_data_name], x_latent = self._run_mapper(
+                encoder,
+                (x_data_latent[in_data_name], x_hidden_latent),
+                batch_size=batch_size,
+                shard_shapes=(shard_shapes_data[in_data_name], shard_shapes_hidden),
+                model_comm_group=model_comm_group,
+            )
+            x_latents.append(x_latent)
+
+        # TODO: This operation can be a design choice (sum, mean, attention, ...)
+        x_latent = torch.stack(x_latents).sum(dim=0) if len(x_latents) > 1 else x_latents[0]
 
         x_latent_proc = self.processor(
             x_latent,
@@ -240,31 +229,30 @@ class AnemoiModelEncProcDec(nn.Module):
         # add skip connection (hidden -> hidden)
         x_latent_proc = x_latent_proc + x_latent
 
-        # Run decoder
-        x_out = self._run_mapper(
-            self.decoder,
-            (x_latent_proc, x_data_latent),
-            batch_size=batch_size,
-            shard_shapes=(shard_shapes_hidden, shard_shapes_data),
-            model_comm_group=model_comm_group,
-        )
-
-        x_out = (
-            einops.rearrange(
-                x_out,
-                "(batch ensemble grid) vars -> batch ensemble grid vars",
-                batch=batch_size,
-                ensemble=ensemble_size,
+        # Run decoders
+        x_out = {}
+        for out_data_name, decoder in self.decoders.items():
+            x_out[out_data_name] = self._run_mapper(
+                decoder,
+                (x_latent_proc, x_data_latent[out_data_name]),
+                batch_size=batch_size,
+                shard_shapes=(shard_shapes_hidden, shard_shapes_data[out_data_name]),
+                model_comm_group=model_comm_group,
             )
-            .to(dtype=x.dtype)
-            .clone()
-        )
 
-        # residual connection (just for the prognostic variables)
-        x_out[..., self._internal_output_idx] += x[:, -1, :, :, self._internal_input_idx]
+            x_out[out_data_name] = (
+                einops.rearrange(
+                    x_out[out_data_name],
+                    "(batch ensemble grid) vars -> batch ensemble grid vars",
+                    batch=batch_size,
+                    ensemble=ensemble_size,
+                )
+                .to(dtype=x.dtype)
+                .clone()
+            )
 
-        for bounding in self.boundings:
-            # bounding performed in the order specified in the config file
-            x_out = bounding(x_out)
+            if out_data_name in self.graph.input_meshes:  # check if the mesh is in the input meshes
+                # residual connection (just for the prognostic variables)
+                x_out[out_data_name][..., self._internal_output_idx] += x[:, -1, :, :, self._internal_input_idx]
 
-        return x_out
+        return x_out[self.graph.output_meshes[0]]
