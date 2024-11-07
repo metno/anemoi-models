@@ -8,6 +8,7 @@
 #
 
 import logging
+import os 
 from abc import ABC
 from abc import abstractmethod
 from typing import Optional
@@ -32,6 +33,7 @@ from anemoi.models.layers.mlp import MLP
 
 LOGGER = logging.getLogger(__name__)
 
+NUM_CHUNKS_INFERENCE = int(os.environ.get("ANEMOI_INFERENCE_NUM_CHUNKS", "1"))
 
 class BaseBlock(nn.Module, ABC):
     """Base class for network blocks."""
@@ -492,7 +494,7 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
 
         # TODO: remove magic number
-        num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
+        num_chunks = self.num_chunks if self.training else NUM_CHUNKS_INFERENCE  # reduce memory for inference
 
         if num_chunks > 1:
             edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
