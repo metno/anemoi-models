@@ -183,7 +183,6 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
         num_heads: int = 16,
         mlp_hidden_ratio: int = 4,
         sub_graph: Optional[HeteroData] = None,
-        sub_graph_edge_attributes: Optional[list[str]] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
     ) -> None:
@@ -220,7 +219,7 @@ class GraphTransformerBaseMapper(GraphEdgeMixin, BaseMapper):
             activation=activation,
         )
 
-        self._register_edges(sub_graph, sub_graph_edge_attributes, src_grid_size, dst_grid_size, trainable_size)
+        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
 
         self.trainable = TrainableTensor(trainable_size=trainable_size, tensor_size=self.edge_attr.shape[0])
 
@@ -283,8 +282,7 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
         activation: str = "GELU",
         num_heads: int = 16,
         mlp_hidden_ratio: int = 4,
-        sub_graph: Optional[HeteroData] = None,
-        sub_graph_edge_attributes: Optional[list[str]] = None,
+        sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
     ) -> None:
@@ -323,7 +321,6 @@ class GraphTransformerForwardMapper(ForwardMapperPreProcessMixin, GraphTransform
             num_heads=num_heads,
             mlp_hidden_ratio=mlp_hidden_ratio,
             sub_graph=sub_graph,
-            sub_graph_edge_attributes=sub_graph_edge_attributes,
             src_grid_size=src_grid_size,
             dst_grid_size=dst_grid_size,
         )
@@ -356,8 +353,7 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
         activation: str = "GELU",
         num_heads: int = 16,
         mlp_hidden_ratio: int = 4,
-        sub_graph: Optional[HeteroData] = None,
-        sub_graph_edge_attributes: Optional[list[str]] = None,
+        sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
     ) -> None:
@@ -396,7 +392,6 @@ class GraphTransformerBackwardMapper(BackwardMapperPostProcessMixin, GraphTransf
             num_heads=num_heads,
             mlp_hidden_ratio=mlp_hidden_ratio,
             sub_graph=sub_graph,
-            sub_graph_edge_attributes=sub_graph_edge_attributes,
             src_grid_size=src_grid_size,
             dst_grid_size=dst_grid_size,
         )
@@ -428,8 +423,7 @@ class GNNBaseMapper(GraphEdgeMixin, BaseMapper):
         cpu_offload: bool = False,
         activation: str = "SiLU",
         mlp_extra_layers: int = 0,
-        sub_graph: Optional[HeteroData] = None,
-        sub_graph_edge_attributes: Optional[list[str]] = None,
+        sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
     ) -> None:
@@ -466,7 +460,7 @@ class GNNBaseMapper(GraphEdgeMixin, BaseMapper):
             activation=activation,
         )
 
-        self._register_edges(sub_graph, sub_graph_edge_attributes, src_grid_size, dst_grid_size, trainable_size)
+        self._register_edges(sub_graph, src_grid_size, dst_grid_size, trainable_size)
 
         self.emb_edges = MLP(
             in_features=self.edge_dim,
@@ -532,8 +526,7 @@ class GNNForwardMapper(ForwardMapperPreProcessMixin, GNNBaseMapper):
         cpu_offload: bool = False,
         activation: str = "SiLU",
         mlp_extra_layers: int = 0,
-        sub_graph: Optional[HeteroData] = None,
-        sub_graph_edge_attributes: Optional[list[str]] = None,
+        sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
     ) -> None:
@@ -571,7 +564,6 @@ class GNNForwardMapper(ForwardMapperPreProcessMixin, GNNBaseMapper):
             activation,
             mlp_extra_layers,
             sub_graph=sub_graph,
-            sub_graph_edge_attributes=sub_graph_edge_attributes,
             src_grid_size=src_grid_size,
             dst_grid_size=dst_grid_size,
         )
@@ -618,8 +610,7 @@ class GNNBackwardMapper(BackwardMapperPostProcessMixin, GNNBaseMapper):
         cpu_offload: bool = False,
         activation: str = "SiLU",
         mlp_extra_layers: int = 0,
-        sub_graph: Optional[HeteroData] = None,
-        sub_graph_edge_attributes: Optional[list[str]] = None,
+        sub_graph: Optional[dict] = None,
         src_grid_size: int = 0,
         dst_grid_size: int = 0,
     ) -> None:
@@ -657,7 +648,6 @@ class GNNBackwardMapper(BackwardMapperPostProcessMixin, GNNBaseMapper):
             activation=activation,
             mlp_extra_layers=mlp_extra_layers,
             sub_graph=sub_graph,
-            sub_graph_edge_attributes=sub_graph_edge_attributes,
             src_grid_size=src_grid_size,
             dst_grid_size=dst_grid_size,
         )
