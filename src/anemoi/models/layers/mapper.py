@@ -118,13 +118,13 @@ class ForwardMapperPreProcessMixin:
 
 class GraphEdgeMixin:
     def _register_edges(
-        self, sub_graph: HeteroData, edge_attributes: list[str], src_size: int, dst_size: int, trainable_size: int
+        self, sub_graph: dict, src_size: int, dst_size: int, trainable_size: int
     ) -> None:
         """Register edge dim, attr, index_base, and increment.
 
         Parameters
         ----------
-        sub_graph : HeteroData
+        sub_graph : dict
             Sub graph of the full structure
         edge_attributes : list[str]
             Edge attributes to use.
@@ -135,14 +135,10 @@ class GraphEdgeMixin:
         trainable_size : int
             Trainable tensor size
         """
-        assert sub_graph, f"{self.__class__.__name__} needs a valid sub_graph to register edges."
-        assert edge_attributes is not None, "Edge attributes must be provided"
-
-        edge_attr_tensor = torch.cat([sub_graph[attr] for attr in edge_attributes], axis=1)
-
-        self.edge_dim = edge_attr_tensor.shape[1] + trainable_size
-        self.register_buffer("edge_attr", edge_attr_tensor, persistent=False)
-        self.register_buffer("edge_index_base", sub_graph.edge_index, persistent=False)
+        
+        self.edge_dim = sub_graph["edge_attr"].shape[1] + trainable_size
+        self.register_buffer("edge_attr", sub_graph["edge_attr"], persistent=False)
+        self.register_buffer("edge_index_base", sub_graph["edge_index"], persistent=False)
         self.register_buffer(
             "edge_inc", torch.from_numpy(np.asarray([[src_size], [dst_size]], dtype=np.int64)), persistent=True
         )
