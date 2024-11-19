@@ -7,6 +7,7 @@
 # nor does it submit to any jurisdiction.
 #
 
+import os
 import logging
 from abc import ABC
 from abc import abstractmethod
@@ -23,6 +24,7 @@ from torch_geometric.typing import Size
 
 from anemoi.models.distributed.graph import shard_tensor
 from anemoi.models.distributed.graph import sync_tensor
+from anemoi.models.distributed.khop_edges import sorted_1hop_chunks
 from anemoi.models.distributed.transformer import shard_heads
 from anemoi.models.distributed.transformer import shard_sequence
 from anemoi.models.layers.attention import MultiHeadSelfAttention
@@ -32,6 +34,7 @@ from anemoi.models.layers.mlp import MLP
 
 LOGGER = logging.getLogger(__name__)
 
+NUM_CHUNKS_INFERENCE = int(os.environ.get("ANEMOI_INFERENCE_NUM_CHUNKS", "1"))
 
 class BaseBlock(nn.Module, ABC):
     """Base class for network blocks."""
@@ -492,11 +495,17 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
 
         # TODO: remove magic number
-        num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
+        num_chunks = self.num_chunks if self.training else NUM_CHUNKS_INFERENCE  # reduce memory for inference
 
         if num_chunks > 1:
-            edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
-            edge_attr_list = torch.tensor_split(edges, num_chunks, dim=0)
+            #edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
+            #edge_attr_list = torch.tensor_split(edges, num_chunks, dim=0)
+            edge_attr_list, edge_index_list = sorted_1hop_chunks(
+                num_nodes=size, edge_attr=edges, edge_index=edge_index,
+                num_chunks=num_chunks
+                )
+            
+            out = torch.zeros_like(query, dtype = query.dtype)
             for i in range(num_chunks):
                 out1 = self.conv(
                     query=query,
@@ -506,20 +515,44 @@ class GraphTransformerMapperBlock(GraphTransformerBaseBlock):
                     edge_index=edge_index_list[i],
                     size=size,
                 )
-                if i == 0:
+                """if i == 0:
                     out = torch.zeros_like(out1)
-                out = out + out1
+                out = out + out1"""
+                out.add_(out1)
+
         else:
             out = self.conv(query=query, key=key, value=value, edge_attr=edges, edge_index=edge_index, size=size)
 
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
-        out = self.projection(out + x_r)
+        #out = self.projection(out + x_r)
 
+        
+        projected = []
+        for chunk in torch.tensor_split(out + x_r, num_chunks, dim = 0):
+            projected.append(self.projection(chunk))
+            del chunk
+
+        out = torch.cat(projected, dim = 0)
+        
         out = out + x_skip[1]
-        nodes_new_dst = self.node_dst_mlp(out) + out
 
-        nodes_new_src = self.node_src_mlp(x_skip[0]) + x_skip[0] if self.update_src_nodes else x_skip[0]
+        nodes_new_dst = []
+        for chunk in out.tensor_split(num_chunks, dim = 0 ):
+            nodes_new_dst.append(self.node_dst_mlp(chunk) + chunk)
+            del chunk 
 
+        nodes_new_dst = torch.cat(nodes_new_dst, dim = 0)        
+        
+        if self.update_src_nodes:
+            nodes_new_src = []
+            for chunk in x_skip[0].tensor_split(num_chunks, dim=0):
+                nodes_new_src.append(self.node_src_mlp(chunk) + chunk)
+                del chunk
+
+            nodes_new_src = torch.cat(nodes_new_src, dim = 0)
+
+        else:
+            nodes_new_src = x_skip[0]
         nodes_new = (nodes_new_src, nodes_new_dst)
 
         return nodes_new, edge_attr
@@ -602,11 +635,13 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
         query, key, value, edges = self.shard_qkve_heads(query, key, value, edges, shapes, batch_size, model_comm_group)
 
         # TODO: Is this alright?
-        num_chunks = self.num_chunks if self.training else 4  # reduce memory for inference
+        num_chunks = self.num_chunks if self.training else NUM_CHUNKS_INFERENCE  # reduce memory for inference
 
         if num_chunks > 1:
             edge_index_list = torch.tensor_split(edge_index, num_chunks, dim=1)
             edge_attr_list = torch.tensor_split(edges, num_chunks, dim=0)
+            
+            out = torch.zeros_like(query, dtype = query.dtype)
             for i in range(num_chunks):
                 out1 = self.conv(
                     query=query,
@@ -616,16 +651,30 @@ class GraphTransformerProcessorBlock(GraphTransformerBaseBlock):
                     edge_index=edge_index_list[i],
                     size=size,
                 )
-                if i == 0:
-                    out = torch.zeros_like(out1)
-                out = out + out1
+                #if i == 0:
+                #    out = torch.zeros_like(out1)
+                #out = out + out1
+                out.add_(out1)
         else:
             out = self.conv(query=query, key=key, value=value, edge_attr=edges, edge_index=edge_index, size=size)
 
         out = self.shard_output_seq(out, shapes, batch_size, model_comm_group)
+        
+        """projected_chunks = []
+        for chunk in torch.tensor_split(out + x_r, num_chunks ,dim = 0):
+            projected_chunks.append(self.projection(chunk))
+            del chunk
+
+        out = torch.cat(projected_chunks, dim = 0)"""
         out = self.projection(out + x_r)
 
         out = out + x_skip
         nodes_new = self.node_dst_mlp(out) + out
+        """nodes_new_chunks = []
+        for chunk in torch.tensor_split(out, num_chunks, dim = 0):
+            nodes_new_chunks.append(self.node_dst_mlp(chunk) + chunk)
+            del chunk 
+
+        nodes_new = torch.cat(nodes_new_chunks, dim = 0)"""
 
         return nodes_new, edge_attr
