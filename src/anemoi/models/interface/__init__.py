@@ -15,6 +15,7 @@ from hydra.utils import instantiate
 from torch_geometric.data import HeteroData
 
 from anemoi.models.preprocessing import Processors
+from anemoi.models.preprocessing import ZipProcessors
 
 
 class AnemoiModelInterface(torch.nn.Module):
@@ -111,3 +112,43 @@ class AnemoiModelInterface(torch.nn.Module):
             y_hat = self(x)
 
         return self.post_processors(y_hat, in_place=False)
+
+class FuserModelInterface(torch.nn.Module):
+
+    def __init__(
+        self, *, config: DotDict, graph_data: HeteroData, statistics: dict, data_indices: dict, metadata: dict
+    ) -> None:
+        super().__init__()
+        self.config = config
+        self.id = str(uuid.uuid4())
+        self.multi_step = self.config.training.multistep_input
+        self.graph_data = graph_data
+        self.statistics = statistics
+        self.metadata = metadata
+        self.data_indices = data_indices
+        self._build_model()
+
+    def _build_model(self) -> None:
+        """Builds the model and pre- and post-processors."""
+        # Instantiate processors
+        processors = tuple([
+            [name, instantiate(processor, data_indices=self.data_indices[i], statistics=self.statistics[i])]
+            for name, processor in dset_config.processors.items()
+        ] for i, dset_config in enumerate(self.config.data.zip))
+
+        # Assign the processor list pre- and post-processors
+        self.pre_processors = ZipProcessors(processors)
+        self.post_processors = ZipProcessors(processors, inverse=True)
+        '''
+        # Instantiate the model
+        self.model = instantiate(
+            self.config.model.model,
+            model_config=self.config,
+            data_indices=self.data_indices,
+            graph_data=self.graph_data,
+            _recursive_=False,  # Disables recursive instantiation by Hydra
+        )
+
+        # Use the forward method of the model directly
+        self.forward = self.model.forward
+        '''

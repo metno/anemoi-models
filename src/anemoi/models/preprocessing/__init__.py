@@ -185,3 +185,27 @@ class Processors(nn.Module):
             assert not torch.isnan(
                 x
             ).any(), f"NaNs ({torch.isnan(x).sum()}) found in processed tensor after {self.__class__.__name__}."
+
+class ZipProcessors(nn.Module):
+
+    def __init__(self, processors_zip: tuple, inverse: bool = False) -> None:
+
+        super().__init__()
+        self.inverse = inverse
+        processors = [Processors(processors, inverse=inverse) for processors in processors_zip]
+        self.processors = nn.ModuleList(processors)
+        
+    def __repr__(self) -> str:
+        return f"{self.__class__.__name__} [{'inverse' if self.inverse else 'forward'}]({self.processors})"
+
+    def forward(self, x: tuple, in_place: bool = True) -> tuple:        
+        if not in_place:
+            y=()
+            for i, processor in enumerate(self.processors):
+                y += (processor(x[i], in_place=False),)
+            return y
+        else:
+            for i, processor in enumerate(self.processors):
+                x[i] = (processor(x[i], in_place=True),)
+            return x
+
