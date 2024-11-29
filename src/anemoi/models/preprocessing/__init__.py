@@ -197,7 +197,7 @@ class ZipProcessors(nn.Module):
         
     def __repr__(self) -> str:
         return f"{self.__class__.__name__} [{'inverse' if self.inverse else 'forward'}]({self.processors})"
-
+    
     def forward(self, x: tuple, in_place: bool = True) -> tuple:        
         if not in_place:
             y=()
@@ -206,6 +206,6 @@ class ZipProcessors(nn.Module):
             return y
         else:
             for i, processor in enumerate(self.processors):
-                x[i] = (processor(x[i], in_place=True),)
+                x[i] = processor(x[i], in_place=True)
             return x
 

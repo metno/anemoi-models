@@ -139,8 +139,7 @@ class FuserModelInterface(torch.nn.Module):
         # Assign the processor list pre- and post-processors
         self.pre_processors = ZipProcessors(processors)
         self.post_processors = ZipProcessors(processors, inverse=True)
-        '''
-        # Instantiate the model
+        
         self.model = instantiate(
             self.config.model.model,
             model_config=self.config,
@@ -151,4 +150,21 @@ class FuserModelInterface(torch.nn.Module):
 
         # Use the forward method of the model directly
         self.forward = self.model.forward
-        '''
+
+
+    def predict_step(self, batch: torch.Tensor) -> torch.Tensor:
+
+        batch = self.pre_processors(batch, in_place=False)
+
+        with torch.no_grad():
+
+            assert (
+                len(batch[0].shape) == 4
+            ), f"The input tensor has an incorrect shape: expected a 4-dimensional tensor, got {batch.shape}!"
+            # Dimensions are
+            # batch, timesteps, horizonal space, variables
+            x = tuple(batch_elem[:, 0 : self.multi_step, None, ...] for batch_elem in batch)
+
+            y_hat = self(x)
+
+        return self.post_processors(y_hat, in_place=False)
