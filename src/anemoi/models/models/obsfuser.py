@@ -208,7 +208,7 @@ class AnemoiObsFuser(nn.Module):
         #Processor skip
         x_latent_proc = x_latent_proc + x_latent
 
-        x_out = [None]*len(x)
+        x_out = [None for _ in range(len(x))]
 
         #Data decoder
         x_out[0] = self._run_mapper(
@@ -228,7 +228,6 @@ class AnemoiObsFuser(nn.Module):
                     shard_shapes=(shard_shapes_hidden, shard_shapes_obs[dset]),
                     model_comm_group=model_comm_group
                 )
-    
         for dset, x_out_elem in enumerate(x_out):
             x_out[dset] = (
                 einops.rearrange(
@@ -237,7 +236,7 @@ class AnemoiObsFuser(nn.Module):
                 batch=batch_size,
                 ensemble=ensemble_size,
             )
-            .to(dtype=x_out_elem.dtype)
+            .to(dtype=x[0].dtype)
             .clone()
             )
 
