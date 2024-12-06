@@ -14,6 +14,8 @@ from torch.distributed.distributed_c10d import ProcessGroup
 from torch.utils.checkpoint import checkpoint
 from torch_geometric.data import HeteroData
 
+from anemoi.models.distributed.shapes import change_channels_in_shape
+from anemoi.models.distributed.graph import gather_tensor
 from anemoi.models.distributed.shapes import get_shape_shards
 from anemoi.models.layers.graph import NamedNodesAttributes
 
@@ -191,14 +193,16 @@ class AnemoiObsFuser(nn.Module):
         )
 
         if self.use_obs_fuser:
-            shard_shapes_hidden_after_enc = get_shape_shards(x_latent, 0, model_comm_group)
+            #Need a gather tensor here for x_latent
+            x_latent = gather_tensor(x_latent, 0, change_channels_in_shape(shard_shapes_hidden, self.num_channels), model_comm_group)
+            shard_shapes_latent = get_shape_shards(x_latent, 0, model_comm_group)
             #Obs fusers
             for dset, obs_encoder in enumerate(self.encoders_obs):
                 x_obs_latent[dset], x_latent = self._run_mapper(
                     obs_encoder,
                     (x_obs_latent[dset], x_latent),
                     batch_size=batch_size,
-                    shard_shapes=(shard_shapes_obs[dset], shard_shapes_hidden_after_enc),
+                    shard_shapes=(shard_shapes_obs[dset], shard_shapes_latent),
                     model_comm_group=model_comm_group,
                 )
         
