@@ -29,6 +29,8 @@ class AnemoiObsFuser(nn.Module):
     ) -> None:
         super().__init__()
 
+        self.use_obs_fuser = model_config.model.use_obs_fuser
+
         self._graph_data = graph_data
         self._graph_name_hidden = model_config.graph.hidden
         self._graph_names_data = tuple(name for name in model_config.graph.input_nodes)
@@ -54,20 +56,21 @@ class AnemoiObsFuser(nn.Module):
             dst_grid_size=self.node_attributes.num_nodes[self._graph_name_hidden],
         )
 
-        self.encoders_obs = nn.ModuleList(
-            [
-            instantiate(
-                model_config.model.encoder_obs,
-                in_channels_src=input_dim[dset_idx],
-                in_channels_dst=self.num_channels,
-                hidden_dim=self.num_channels,
-                sub_graph=self._graph_data[(self._graph_names_data[dset_idx], "to", self._graph_name_hidden)],
-                src_grid_size=self.node_attributes.num_nodes[self._graph_names_data[dset_idx]],
-                dst_grid_size=self.node_attributes.num_nodes[self._graph_name_hidden],
+        if self.use_obs_fuser:
+            self.encoders_obs = nn.ModuleList(
+                [
+                instantiate(
+                    model_config.model.encoder_obs,
+                    in_channels_src=input_dim[dset_idx],
+                    in_channels_dst=self.num_channels,
+                    hidden_dim=self.num_channels,
+                    sub_graph=self._graph_data[(self._graph_names_data[dset_idx], "to", self._graph_name_hidden)],
+                    src_grid_size=self.node_attributes.num_nodes[self._graph_names_data[dset_idx]],
+                    dst_grid_size=self.node_attributes.num_nodes[self._graph_name_hidden],
+                )
+                for dset_idx, dset in enumerate(self._graph_names_data) if dset != self._graph_names_data[0]
+                ]
             )
-            for dset_idx, dset in enumerate(self._graph_names_data) if dset != self._graph_names_data[0]
-            ]
-        )
 
         self.processor = instantiate(
             model_config.model.processor,
@@ -187,15 +190,17 @@ class AnemoiObsFuser(nn.Module):
             model_comm_group=model_comm_group,
         )
 
-        #Obs fusers
-        for dset, obs_encoder in enumerate(self.encoders_obs):
-            x_obs_latent[dset], x_latent = self._run_mapper(
-                obs_encoder,
-                (x_obs_latent[dset], x_latent),
-                batch_size=batch_size,
-                shard_shapes=(shard_shapes_obs[dset], shard_shapes_hidden),
-                model_comm_group=model_comm_group,
-            )
+        if self.use_obs_fuser:
+            shard_shapes_hidden_after_enc = get_shape_shards(x_latent, 0, model_comm_group)
+            #Obs fusers
+            for dset, obs_encoder in enumerate(self.encoders_obs):
+                x_obs_latent[dset], x_latent = self._run_mapper(
+                    obs_encoder,
+                    (x_obs_latent[dset], x_latent),
+                    batch_size=batch_size,
+                    shard_shapes=(shard_shapes_obs[dset], shard_shapes_hidden_after_enc),
+                    model_comm_group=model_comm_group,
+                )
         
         #Processor
         x_latent_proc = self.processor(
