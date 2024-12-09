@@ -65,6 +65,14 @@ class ReluBounding(BaseBounding):
         return x
 
 
+class SigmoidBounding(BaseBounding):
+    """Initializes the bounding with a sigmoid activation."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x[..., self.data_index] = torch.nn.functional.sigmoid(x[..., self.data_index])
+        return x
+
+
 class HardtanhBounding(BaseBounding):
     """Initializes the bounding with specified minimum and maximum values for bounding.
 
