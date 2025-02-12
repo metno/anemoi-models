@@ -72,6 +72,32 @@ class SigmoidBounding(BaseBounding):
         x[..., self.data_index] = torch.nn.functional.sigmoid(x[..., self.data_index])
         return x
 
+class LinearBounding(BaseBounding):
+    """Initializes the bounding with a sigmoid activation."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return x
+
+class ClampedBounding(BaseBounding):
+    """Bounding strategy that clamps values to a specified range."""
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Applies clamping to the selected indices of the tensor.
+
+        Parameters:
+        ----------
+        x : torch.Tensor
+            The tensor containing predictions to be clamped.
+
+        Returns:
+        -------
+        torch.Tensor
+            The tensor with clamped values applied.
+        """
+        # Apply clamping to the selected data index
+        x[..., self.data_index] = torch.clamp(x[..., self.data_index], min=-5, max=5)
+        return x
+
 
 class HardtanhBounding(BaseBounding):
     """Initializes the bounding with specified minimum and maximum values for bounding.
