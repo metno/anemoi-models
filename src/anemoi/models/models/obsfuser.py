@@ -108,12 +108,15 @@ class AnemoiObsFuser(nn.Module):
             for dset_idx, dset in enumerate(self._graph_names_data) if dset != self._graph_names_data[0]
             ]
         )
+
         self.boundings = nn.ModuleList(
-            [
-            instantiate(cfg, name_to_index=self.data_indices[dset].internal_model.output.name_to_index)
-            for dset, cfg in enumerate(getattr(model_config.model, "bounding", []))
+            [nn.ModuleList(
+                [instantiate(cfg, name_to_index=self.data_indices[dset_index].internal_model.output.name_to_index)
+                for cfg in dset_boundings]
+                ) 
+                for dset_index, dset_boundings in enumerate(getattr(model_config.model, "bounding",[]))
             ]
-        )    
+        )   
 
     def _calculate_shapes_and_indices(self, data_indices: tuple) -> None:
         self.num_input_channels = tuple(len(indices.internal_model.input) for indices in data_indices)
@@ -251,7 +254,8 @@ class AnemoiObsFuser(nn.Module):
 
             x_out[dset][..., self._internal_output_idx[dset]] += x[dset][:, -1, :, :, self._internal_input_idx[dset]]
 
-            x_out[dset] = self.boundings[dset](x_out[dset])
+            for bounding in self.boundings[dset]:
+                x_out[dset] = bounding(x_out[dset])
 
         return list(x_out)
 

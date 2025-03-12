@@ -73,7 +73,7 @@ class SigmoidBounding(BaseBounding):
         return x
 
 class LinearBounding(BaseBounding):
-    """Initializes the bounding with a sigmoid activation."""
+    """Effectively no bounding"""
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return x
